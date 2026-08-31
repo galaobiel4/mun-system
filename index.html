@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+  <head>
+    <meta charset="UTF-8">
+    <title>TESTE</title>
+    
+    <link rel='stylesheet' href="style.css">
+  </head>
+  <body>
+  <header class='cabecalho'>
+    <h1 class='titulo'>MINIONU</h1>
+     
+    </header>   
+    <div class='div1'>
+        <!--SELEÇÃO DE COMITÊ -->
+      <select id='comite' name='comite'> 
+      <option value='' disabled selected hidden>Selecione seu comitê </option>
+      <option value='CDH'>
+        CDH - Comissão de Direitos Humanos 
+      </option>
+      <option value='OMS'>
+        OMS - Organização Mundial da Saúde 
+      </option>
+      <option value='UNESCO'>Unesco 
+        - Organização das Nações Unidas para Educação, Ciência e Cultura</option>
+      <option value='ONUM'>
+        ONU Mulheres
+        - Entidade das Nações Unidaspara a Igualdade de Gênero e o Empoderamento das Mulheres
+      </option>
+      <option value='CSNU'>
+        CSNU - Conselho de Segurança das Nações Unidas
+      </option>
+      <option value='ACNUR'>
+        ACNUR - Alto Comissariado das Nações Unidas para Refugiados
+      </option>
+      <option value='CDESC'>
+        CDESC - Direitos econômicos, sociais e culturais da ONU
+      </option>
+      <option value='UNICEF'>
+        UNICEF - Fundo das Nações Unidas para a Infância
+      </option>
+        </select>
+        <br>
+        <!--CONFIGURAÇÕES COMITÊ -->
+        <label for='config'> Veto?</label> <br> 
+        <input type='radio' name="config" id=veto >Sim <br>
+        <input type='radio' name="config" id=sem-veto>Não
+        <br> 
+        <details class='paises-veto'>
+          <summary>Países com veto</summary>
+          
+        <input type='checkbox' name="config" id="brasil">Brasil<br>
+        <input type='checkbox' name='config' id='india'>Índia<br>
+        <input type='checkbox' name='config' id='eua'>EUA<br>
+        <input type='checkbox' name='config' id='turquia'>Turquia<br>
+        <input type='checkbox' name='config' id='russia'>Russia<br>
+        <input type='checkbox' name='config' id='china'>China<br>
+        <input type='checkbox' name='config' id='nigeria'>Nigéria<br>
+        <input type='checkbox' name='config' id='alemanha'>Alemanha<br>
+        <input type='checkbox' name='config' id='franca'>França<br>
+        <input type='checkbox' name='config' id='uk'>Reino Unido<br>
+        </details>
+          </div>
+<!--DIVISÓRIA --> <hr>
+    <!--Crise:Explicação e detalhamento-->
+    <div class=div2>
+      <h2>CRISE</h2>
+      <input class='crise' type=text placeholder='Insira a crise...' required>
+      <br>
+      <textarea class='detalhamentocrise' placeholder='Insira detalhamento e resolução...'></textarea>
+    </div>
+    <script src='script.js'></script>
+  </body>
+</html>
+
+   
