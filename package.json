@@ -1,0 +1,12 @@
+{
+  "name": "mun-system",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:api": "wrangler dev --config backend/wrangler.toml",
+    "db:local": "wrangler d1 migrations apply minionu --local --config backend/wrangler.toml",
+    "db:remote": "wrangler d1 migrations apply minionu --remote --config backend/wrangler.toml",
+    "deploy:api": "wrangler deploy --config backend/wrangler.toml"
+  },
+  "devDependencies": { "wrangler": "^4.0.0" }
+}

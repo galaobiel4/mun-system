@@ -2,33 +2,15 @@
 <html lang="pt-br">
   <head>
     <meta charset="UTF-8">
-    <title>MINIONU · Formulário de crise</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TESTE</title>
     
     <link rel='stylesheet' href="style.css">
-    <link rel="stylesheet" href="live.css">
   </head>
   <body>
   <header class='cabecalho'>
     <h1 class='titulo'>MINIONU</h1>
      
-    </header>
-    <section class="connection-panel" aria-label="Acompanhamento ao vivo">
-      <h2>Acompanhamento ao vivo</h2>
-      <p id="sync-status" role="status">Formulário local. Crie ou abra uma sala para compartilhar as alterações.</p>
-      <button id="create-room" type="button">Criar sala de acompanhamento</button>
-      <details><summary>Abrir sala existente</summary><div class="connection-fields">
-        <label>ID da sala <input id="room-id" autocomplete="off"></label>
-        <label>Chave de edição <input id="room-key" type="password" autocomplete="off"></label>
-        <button id="join-room" type="button">Abrir sala</button>
-      </div></details>
-      <div id="room-sharing" hidden>
-        <label>Link para a pessoa supervisora <input id="supervisor-link" readonly></label>
-        <button id="copy-supervisor" type="button">Copiar link</button>
-        <a id="open-supervisor" href="supervisor.html" target="_blank" rel="noopener">Abrir painel</a>
-        <p>Compartilhe o link de supervisão. Ele permite acompanhar o formulário.</p>
-      </div>
-    </section>
+    </header>   
     <div class='div1'>
         <!--SELEÇÃO DE COMITÊ -->
       <select id='comite' name='comite' onchange="selecao(this.value)"> 
@@ -91,6 +73,5 @@
     <div class=votacao id=votacao>
     </div>
     <script src='script.js'></script>
-    <script type="module" src="live-integration.js"></script>
   </body>
 </html>

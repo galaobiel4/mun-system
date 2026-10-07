@@ -1,0 +1,59 @@
+
+body {
+    background-color: #8aa5ba;
+    font-family: Helvetica;
+}
+
+/*HEADER que inclui o titulo*/
+.cabecalho {
+  background-color: white;
+  width:500px;
+}
+/* MINI ONU no topo da página */
+.titulo {
+  color: blue;
+  font-size: 1cm;
+  text-align: center;
+}
+
+p {
+  color:blue;
+}
+/*Divisória da */
+.div1 {
+  background-color:white;
+  width:700px
+}
+
+#comite {
+  color:blue;
+}
+.detalhamentocrise {
+  resize:none;
+  width:400px;
+  height:80px
+}
+
+.paises-veto {
+  display:none
+}
+
+#veto:checked ~ .paises-veto {
+  display: block;
+}
+.div2{
+  background-color:white;
+  width:600px
+}
+#pais {
+  background-color:white
+  width:600px
+}
+.comentarios{
+  resize:none;
+  
+}
+.votopais {
+  display: inline-block;
+  width: 110px; 
+}

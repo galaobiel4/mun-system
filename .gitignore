@@ -1,0 +1,6 @@
+node_modules/
+.wrangler/
+backend/.wrangler/
+.dev.vars
+backend/.dev.vars
+_site/
