@@ -19,7 +19,7 @@ jobs:
       - name: Prepare static frontend
         run: |
           mkdir _site
-          cp index.html script.js style.css live.css live-integration.js config.js client.js supervisor.html supervisor.js supervisor.css _site/
+          cp index.html script.js style.css live.css live-integration.js config.js client.js committees.js supervisor.html supervisor.js supervisor.css _site/
           touch _site/.nojekyll
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

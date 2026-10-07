@@ -1,24 +1,18 @@
 <!doctype html>
 <html lang="pt-BR">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Painel de supervisão · MINIONU</title>
-  <link rel="stylesheet" href="supervisor.css">
-</head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Acompanhamento geral · MINIONU</title><link rel="stylesheet" href="supervisor.css"></head>
 <body>
-  <main class="wrap">
-    <header><div><p class="eyebrow">MINIONU</p><h1>Painel de supervisão</h1><p>Crise, votos e comentários atualizados ao vivo.</p></div><span id="status" class="status" role="status">Aguardando sala</span></header>
-    <section class="card" id="connection"><h2>Acompanhar uma sala</h2><p>Abra o link compartilhado pela organização ou informe os dados abaixo.</p><form id="connect-form" class="join"><label>ID da sala <input id="room" required autocomplete="off"></label><label>Chave de supervisão <input id="key" type="password" required autocomplete="off"></label><button type="submit">Acompanhar</button></form></section>
-    <section class="card"><div class="section-header"><h2>Estado atual</h2><p id="updated">Nenhuma atualização recebida.</p></div><div class="grid">
-      <div class="field" data-field="committee"><small>Comitê</small><strong id="committee">—</strong></div>
-      <div class="field" data-field="hasVeto"><small>Veto</small><strong id="hasVeto">—</strong></div>
-      <div class="field wide" data-field="vetoCountries"><small>Países com veto</small><strong id="vetoCountries">—</strong></div>
-      <div class="field wide" data-field="crisisTitle"><small>Crise</small><strong id="crisisTitle">—</strong></div>
-      <div class="field wide" data-field="crisisDetails"><small>Detalhamento e resolução</small><div id="crisisDetails" class="long-text">—</div></div>
-    </div></section>
-    <section class="card"><h2>Votação</h2><div class="totals"><div class="total yes"><span id="count-yes">0</span><small>Favoráveis</small></div><div class="total neutral"><span id="count-neutral">0</span><small>Abstidos</small></div><div class="total no"><span id="count-no">0</span><small>Contra</small></div><div class="total"><span id="count-empty">0</span><small>Sem voto</small></div></div><div class="table-scroll"><table><thead><tr><th>Delegação</th><th>Voto</th><th>Comentário</th></tr></thead><tbody id="delegations"><tr><td colspan="3">Selecione um comitê no formulário para exibir as delegações.</td></tr></tbody></table></div></section>
-    <section class="card"><h2>Alterações recentes</h2><p>Cada aviso identifica o campo e o que mudou. As últimas 50 atualizações são recuperadas ao reconectar.</p><div id="events"><p class="empty">Nenhuma alteração nesta sala.</p></div></section>
+  <section id="login-area" class="login-shell">
+    <p class="eyebrow">MINIONU · SUPERVISÃO</p><h1>Acompanhamento geral</h1><p>Entre para acompanhar os 8 comitês e todas as delegações ao vivo.</p>
+    <form id="login-form" class="login-card"><label>Login<input id="username" autocomplete="username" required maxlength="100"></label><label>Senha<input id="password" type="password" autocomplete="current-password" required maxlength="200"></label><button id="login-button" type="submit">Entrar no painel</button><p id="login-error" class="error-text" role="alert"></p></form>
+    <a href="index.html">Abrir formulário de comitê</a>
+  </section>
+  <main id="panel" class="wrap" hidden>
+    <header><div><p class="eyebrow">MINIONU</p><h1>Acompanhamento geral</h1><p>Todos os comitês e delegações na mesma tela.</p></div><div class="header-controls"><span id="status" class="status" role="status">Conectando…</span><button id="logout" class="secondary">Sair</button></div></header>
+    <section class="summary"><div><strong id="committee-count">8</strong><span>Comitês</span></div><div><strong id="online-count">0</strong><span>Comitês com formulário aberto</span></div><div><strong id="delegation-count">0</strong><span>Delegações acompanhadas</span></div></section>
+    <nav id="overview" class="overview" aria-label="Visão geral dos comitês"></nav>
+    <section id="committee-grid" class="committee-grid" aria-label="Todos os comitês e delegações"></section>
+    <section class="events-card"><h2>Últimas alterações · todos os comitês</h2><p>Comitê, delegação e campo alterado identificados em cada aviso.</p><div id="events"></div></section>
   </main>
   <script type="module" src="supervisor.js"></script>
 </body>

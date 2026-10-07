@@ -1,63 +1,58 @@
-const MAX_BODY_BYTES = 64_000;
-const COMMITTEES = new Set(['', 'CDH', 'OMS', 'UNESCO', 'ONUM', 'CSNU', 'ACNUR', 'CDESC', 'UNICEF']);
-const COUNTRIES = ['Brasil', 'Rússia', 'EUA', 'Índia', 'China', 'Nigéria', 'Alemanha', 'França', 'Turquia', 'Reino Unido'];
+import { COMMITTEES, COUNTRIES, committeeByCode, emptyForm } from '../../committees.js';
+const MAX_BODY = 64000, SESSION_MS = 8 * 60 * 60 * 1000;
 const VOTES = new Set(['', 'favoravel', 'abstido', 'contra']);
 const VOTE_LABELS = { '': 'Sem voto', favoravel: 'Favorável', abstido: 'Abstido', contra: 'Contra' };
+const json = (data, status = 200, headers = {}) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers } });
+class InputError extends Error {}
 
 export default {
   async fetch(request, env) {
     const origin = request.headers.get('Origin') || '';
-    const origins = (env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
-    const allowed = origins.includes(origin);
-    const cors = allowed ? {
-      'access-control-allow-origin': origin, 'access-control-allow-methods': 'GET, POST, PUT, OPTIONS',
-      'access-control-allow-headers': 'Content-Type, Authorization', 'access-control-max-age': '86400', vary: 'Origin'
-    } : {};
+    const allowed = (env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).includes(origin) && Boolean(origin);
+    const cors = allowed ? { 'access-control-allow-origin': origin, 'access-control-allow-methods': 'GET, PUT, POST, OPTIONS', 'access-control-allow-headers': 'Content-Type, Authorization', vary: 'Origin' } : {};
     const respond = (data, status = 200) => json(data, status, cors);
-    if (request.method === 'OPTIONS') return new Response(null, { status: allowed ? 204 : 403, headers: cors });
     const url = new URL(request.url);
-    if (url.pathname === '/api/health' && request.method === 'GET') return respond({ ok: true });
+    if (url.pathname === '/api/health') return respond({ ok: true });
+    if (request.method === 'OPTIONS') return new Response(null, { status: allowed ? 204 : 403, headers: cors });
     if (!allowed) return respond({ error: 'Origem não autorizada.' }, 403);
     try {
-      if (url.pathname === '/api/rooms' && request.method === 'POST') {
-        const room = normalizeState(await readJson(request));
-        const id = crypto.randomUUID(), accessKey = randomKey(), watchKey = randomKey();
-        const now = new Date().toISOString();
-        await env.DB.prepare(`INSERT INTO rooms (id, access_key_hash, watch_key_hash, committee, has_veto, crisis_title, crisis_details, state_json, revision, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`)
-          .bind(id, await sha256(accessKey), await sha256(watchKey), room.committee, room.hasVeto ? 1 : 0, room.crisisTitle, room.crisisDetails, JSON.stringify(room.state), now, now).run();
-        return respond({ id, accessKey, watchKey, ...room, revision: 0, createdAt: now, updatedAt: now }, 201);
+      if (url.pathname === '/api/auth/login' && request.method === 'POST') {
+        if (!env.SUPERVISOR_USER || !env.SUPERVISOR_PASSWORD) return respond({ error: 'O administrador ainda precisa ativar o login do painel no servidor.' }, 503);
+        const fingerprint = base64(await digest(request.headers.get('CF-Connecting-IP') || 'local'));
+        const limit = await env.DASHBOARD.get(env.DASHBOARD.idFromName('all-committees')).fetch('https://dashboard.internal/login-attempt', { method: 'POST', body: JSON.stringify({ fingerprint }) });
+        if (limit.status === 429) return respond({ error: 'Muitas tentativas. Aguarde um minuto e tente novamente.' }, 429);
+        const body = await readJson(request);
+        if (!body || typeof body !== 'object' || Array.isArray(body)) throw new InputError('Login inválido.');
+        const user = text(body.username, 100), password = text(body.password, 200);
+        if (!equal(await digest(user), await digest(env.SUPERVISOR_USER)) || !equal(await digest(password), await digest(env.SUPERVISOR_PASSWORD))) return respond({ error: 'Login ou senha inválidos.' }, 401);
+        const expiresAt = Date.now() + SESSION_MS;
+        return respond({ token: await makeToken(env, expiresAt), expiresAt });
       }
-      const match = url.pathname.match(/^\/api\/rooms\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(\/live)?$/i);
-      if (!match) return respond({ error: 'Rota não encontrada.' }, 404);
-      const [, id, live] = match;
-      if (live && (request.method !== 'GET' || request.headers.get('Upgrade')?.toLowerCase() !== 'websocket')) return respond({ error: 'Esta rota exige WebSocket.' }, 426);
-      if (!live && !['GET', 'PUT'].includes(request.method)) return respond({ error: 'Método não permitido.' }, 405);
-      // Browser WebSocket authentication uses a subprotocol, keeping credentials out of URLs.
-      const protocols = (request.headers.get('Sec-WebSocket-Protocol') || '').split(',').map(s => s.trim());
-      const key = live ? protocols.find(s => s.startsWith('mun-auth.'))?.slice(9) : request.headers.get('Authorization')?.replace(/^Bearer\s+/i, '');
-      if (!key || !/^[0-9a-f]{64}$/.test(key)) return respond({ error: 'Informe uma chave de acesso válida.' }, 401);
-      const row = await env.DB.prepare('SELECT * FROM rooms WHERE id = ?').bind(id).first();
-      const hash = await sha256(key);
-      const editor = row && constantTimeEqual(hash, row.access_key_hash);
-      const viewer = row && constantTimeEqual(hash, row.watch_key_hash);
-      if (!editor && !viewer) return respond({ error: 'Sala ou chave inválida.' }, 403);
-      if (!live && request.method === 'GET') return respond({ ...serializeRoom(row), role: editor ? 'editor' : 'viewer' });
-      if (!live && !editor) return respond({ error: 'A chave de supervisão permite apenas acompanhar.' }, 403);
-      const stub = env.ROOMS.get(env.ROOMS.idFromName(id));
-      if (live) {
-        const headers = new Headers(request.headers);
-        headers.set('x-room-id', id);
-        return stub.fetch(new Request('https://room.internal/connect', { method: 'GET', headers }));
+      if (url.pathname === '/api/dashboard' || url.pathname === '/api/dashboard/live') {
+        if (request.method !== 'GET') return respond({ error: 'Método não permitido.' }, 405);
+        const live = url.pathname.endsWith('/live');
+        const token = live ? wsCredential(request) : request.headers.get('Authorization')?.replace(/^Bearer\s+/i, '');
+        const session = await verifyToken(env, token);
+        if (!session) return respond({ error: 'Entre com login e senha para acompanhar os comitês.' }, 401);
+        if (live && request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return respond({ error: 'Esta rota exige WebSocket.' }, 426);
+        const stub = env.DASHBOARD.get(env.DASHBOARD.idFromName('all-committees'));
+        const headers = new Headers(request.headers); headers.set('x-session-expires', String(session.expiresAt));
+        const response = await stub.fetch(new Request(`https://dashboard.internal/${live ? 'connect' : 'snapshot'}`, { headers }));
+        return live ? response : respond(await response.json(), response.status);
       }
-      const room = normalizeState(await readJson(request));
-      const result = await stub.fetch('https://room.internal/save', {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, room })
-      });
-      return respond(await result.json(), result.status);
+      const match = url.pathname.match(/^\/api\/committees\/([A-Z0-9_-]+)(\/live)?$/);
+      if (!match || !committeeByCode(match[1])) return respond({ error: 'Comitê não encontrado.' }, 404);
+      const [, code, live] = match;
+      if (!['GET', 'PUT'].includes(request.method) || (live && request.method !== 'GET')) return respond({ error: 'Método não permitido.' }, 405);
+      if (live && request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return respond({ error: 'Esta rota exige WebSocket.' }, 426);
+      const stub = env.ROOMS.get(env.ROOMS.idFromName(`committee:${code}`));
+      const headers = new Headers(request.headers); headers.set('x-committee-code', code);
+      const form = request.method === 'PUT' ? normalize(await readJson(request), code) : undefined;
+      const response = await stub.fetch(new Request(`https://committee.internal/${live ? 'connect' : form ? 'save' : 'snapshot'}`, { method: form ? 'POST' : 'GET', headers, body: form ? JSON.stringify(form) : undefined }));
+      return live ? response : respond(await response.json(), response.status);
     } catch (error) {
       if (error instanceof InputError) return respond({ error: error.message }, 400);
-      console.error('MINIONU API:', error.message);
+      console.error('MINIONU:', error.message);
       return respond({ error: 'Não foi possível concluir a operação. Tente novamente.' }, 503);
     }
   }
@@ -66,112 +61,140 @@ export default {
 export class RoomLiveUpdates {
   constructor(state, env) { this.state = state; this.env = env; this.queue = Promise.resolve(); }
   fetch(request) {
-    // Serialize snapshots and writes per room to preserve the order of live events.
-    const work = this.queue.then(() => this.handle(request));
-    this.queue = work.catch(() => {});
-    return work;
+    if (new URL(request.url).pathname === '/presence') return json({ activeEditors: this.active() });
+    const work = this.queue.then(() => this.handle(request)); this.queue = work.catch(() => {}); return work;
   }
+  active(exclude) { return this.state.getWebSockets().filter(socket => socket !== exclude && socket.readyState === 1).length; }
   async handle(request) {
+    const code = request.headers.get('x-committee-code');
+    if (!committeeByCode(code)) return json({ error: 'Comitê inválido.' }, 400);
+    let row = await this.env.DB.prepare('SELECT * FROM committee_forms WHERE code = ?').bind(code).first();
+    if (!row) {
+      const now = new Date().toISOString();
+      await this.env.DB.prepare('INSERT INTO committee_forms (code, form_json, revision, created_at, updated_at) VALUES (?, ?, 0, ?, ?)').bind(code, JSON.stringify(emptyForm(code)), now, now).run();
+      row = await this.env.DB.prepare('SELECT * FROM committee_forms WHERE code = ?').bind(code).first();
+    }
     const path = new URL(request.url).pathname;
+    if (path === '/snapshot') return json(formSnapshot(row));
     if (path === '/connect') {
-      const id = request.headers.get('x-room-id');
-      const row = await this.env.DB.prepare('SELECT * FROM rooms WHERE id = ?').bind(id).first();
-      if (!row) return json({ error: 'Sala não encontrada.' }, 404);
-      const history = await this.env.DB.prepare('SELECT revision, changes_json, created_at FROM room_events WHERE room_id = ? ORDER BY revision DESC LIMIT 50').bind(id).all();
-      const pair = new WebSocketPair();
-      this.state.acceptWebSocket(pair[1]);
-      pair[1].send(JSON.stringify({ type: 'snapshot', ...serializeRoom(row), recentEvents: history.results.map(event => ({ revision: event.revision, updatedAt: event.created_at, changes: JSON.parse(event.changes_json) })) }));
-      return new Response(null, { status: 101, webSocket: pair[0], headers: { 'Sec-WebSocket-Protocol': 'mun-live' } });
+      const pair = new WebSocketPair(); this.state.acceptWebSocket(pair[1]); pair[1].serializeAttachment({ code });
+      pair[1].send(JSON.stringify({ type: 'form-snapshot', ...formSnapshot(row) }));
+      await this.publish({ type: 'presence', committee: code, activeEditors: this.active() });
+      return new Response(null, { status: 101, webSocket: pair[0] });
     }
     if (path === '/save' && request.method === 'POST') {
-      const { id, room } = await request.json();
-      const row = await this.env.DB.prepare('SELECT * FROM rooms WHERE id = ?').bind(id).first();
-      if (!row) return json({ error: 'Sala não encontrada.' }, 404);
-      const before = serializeRoom(row), changes = diffState(before, room);
-      if (!changes.length) return json(before);
+      const form = await request.json(), changes = diff(JSON.parse(row.form_json), form);
+      if (!changes.length) return json(formSnapshot(row));
       const now = new Date().toISOString(), revision = row.revision + 1;
       await this.env.DB.batch([
-        this.env.DB.prepare(`UPDATE rooms SET committee = ?, has_veto = ?, crisis_title = ?, crisis_details = ?, state_json = ?, revision = ?, updated_at = ? WHERE id = ?`)
-          .bind(room.committee, room.hasVeto ? 1 : 0, room.crisisTitle, room.crisisDetails, JSON.stringify(room.state), revision, now, id),
-        this.env.DB.prepare('INSERT INTO room_events (room_id, revision, changes_json, created_at) VALUES (?, ?, ?, ?)').bind(id, revision, JSON.stringify(changes), now)
+        this.env.DB.prepare('UPDATE committee_forms SET form_json = ?, revision = ?, updated_at = ? WHERE code = ?').bind(JSON.stringify(form), revision, now, code),
+        this.env.DB.prepare('INSERT INTO committee_events (committee_code, revision, changes_json, created_at) VALUES (?, ?, ?, ?)').bind(code, revision, JSON.stringify(changes), now)
       ]);
-      const saved = { id, ...room, revision, createdAt: row.created_at, updatedAt: now };
-      const message = JSON.stringify({ type: 'form-update', ...saved, changes, changedFields: changes.map(c => c.label) });
-      for (const socket of this.state.getWebSockets()) {
-        try { socket.send(message); } catch { /* Reconnection recovers the latest stored snapshot. */ }
-      }
+      const saved = { ...form, revision, updatedAt: now, createdAt: row.created_at, activeEditors: this.active() };
+      const message = { type: 'form-update', ...saved, changes };
+      for (const socket of this.state.getWebSockets()) { try { socket.send(JSON.stringify(message)); } catch {} }
+      await this.publish(message);
       return json(saved);
     }
     return json({ error: 'Rota não encontrada.' }, 404);
   }
-  webSocketMessage(socket) { socket.close(1008, 'A conexão de supervisão recebe atualizações apenas.'); }
-  webSocketClose(socket, code, reason) { socket.close(code, reason); }
+  async publish(event) {
+    await this.env.DASHBOARD.get(this.env.DASHBOARD.idFromName('all-committees')).fetch('https://dashboard.internal/update', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(event) });
+  }
+  webSocketMessage(socket) { socket.close(1008, 'Esta conexão recebe atualizações apenas.'); }
+  async webSocketClose(socket, code, reason) {
+    const attachment = socket.deserializeAttachment(); socket.close([1005, 1006, 1015].includes(code) ? 1000 : code, reason);
+    if (attachment) await this.publish({ type: 'presence', committee: attachment.code, activeEditors: this.active(socket) });
+  }
+  async webSocketError(socket) {
+    const attachment = socket.deserializeAttachment(); socket.close(1011, 'Erro de conexão.');
+    if (attachment) await this.publish({ type: 'presence', committee: attachment.code, activeEditors: this.active(socket) });
+  }
+}
+
+export class GlobalDashboard {
+  constructor(state, env) { this.state = state; this.env = env; this.queue = Promise.resolve(); }
+  fetch(request) { const work = this.queue.then(() => this.handle(request)); this.queue = work.catch(() => {}); return work; }
+  async snapshot() {
+    const rows = await this.env.DB.prepare('SELECT * FROM committee_forms').all();
+    const presence = await Promise.all(COMMITTEES.map(async committee => {
+      const response = await this.env.ROOMS.get(this.env.ROOMS.idFromName(`committee:${committee.code}`)).fetch('https://committee.internal/presence'); return response.json();
+    }));
+    const history = await this.env.DB.prepare('SELECT committee_code, revision, changes_json, created_at FROM committee_events ORDER BY created_at DESC LIMIT 50').all();
+    return {
+      type: 'dashboard-snapshot',
+      committees: COMMITTEES.map((committee, index) => {
+        const row = rows.results.find(r => r.code === committee.code);
+        return { ...(row ? formSnapshot(row) : { ...emptyForm(committee.code), revision: 0, updatedAt: null }), name: committee.name, activeEditors: presence[index].activeEditors };
+      }),
+      recentEvents: history.results.map(event => ({ committee: event.committee_code, revision: event.revision, updatedAt: event.created_at, changes: JSON.parse(event.changes_json) }))
+    };
+  }
+  async handle(request) {
+    const path = new URL(request.url).pathname;
+    if (path === '/login-attempt' && request.method === 'POST') {
+      const { fingerprint } = await request.json(), key = `login:${fingerprint}`, window = Math.floor(Date.now() / 60000);
+      const previous = await this.state.storage.get(key);
+      const count = previous?.window === window ? previous.count : 0;
+      if (count >= 8) return json({ error: 'Limite de tentativas.' }, 429);
+      await this.state.storage.put(key, { window, count: count + 1 });
+      return json({ ok: true });
+    }
+    if (path === '/snapshot') return json(await this.snapshot());
+    if (path === '/connect') {
+      const data = await this.snapshot(), pair = new WebSocketPair();
+      this.state.acceptWebSocket(pair[1]); pair[1].serializeAttachment({ expiresAt: Number(request.headers.get('x-session-expires')) });
+      pair[1].send(JSON.stringify(data));
+      return new Response(null, { status: 101, webSocket: pair[0], headers: { 'Sec-WebSocket-Protocol': 'mun-live' } });
+    }
+    if (path === '/update' && request.method === 'POST') {
+      const event = await request.json();
+      for (const socket of this.state.getWebSockets()) {
+        try { if (socket.deserializeAttachment().expiresAt <= Date.now()) socket.close(1008, 'Sessão expirada.'); else socket.send(JSON.stringify(event)); } catch {}
+      }
+      return json({ ok: true });
+    }
+    return json({ error: 'Rota não encontrada.' }, 404);
+  }
+  webSocketMessage(socket) { socket.close(1008, 'Painel somente para acompanhamento.'); }
+  webSocketClose(socket, code, reason) { socket.close([1005, 1006, 1015].includes(code) ? 1000 : code, reason); }
   webSocketError(socket) { socket.close(1011, 'Erro de conexão.'); }
 }
 
-function json(data, status = 200, headers = {}) { return new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers } }); }
-class InputError extends Error {}
+function formSnapshot(row) { return { ...JSON.parse(row.form_json), revision: row.revision, createdAt: row.created_at, updatedAt: row.updated_at }; }
 async function readJson(request) {
   if (!request.headers.get('content-type')?.includes('application/json')) throw new InputError('Envie JSON.');
-  if (Number(request.headers.get('content-length') || 0) > MAX_BODY_BYTES) throw new InputError('O formulário excede o limite de tamanho.');
-  const reader = request.body?.getReader();
-  if (!reader) throw new InputError('Envie o formulário.');
-  let bytes = 0; const chunks = [];
-  while (true) {
-    const { done, value } = await reader.read(); if (done) break;
-    bytes += value.byteLength;
-    if (bytes > MAX_BODY_BYTES) { await reader.cancel(); throw new InputError('O formulário excede o limite de tamanho.'); }
-    chunks.push(value);
-  }
-  const buffer = new Uint8Array(bytes); let offset = 0;
-  for (const chunk of chunks) { buffer.set(chunk, offset); offset += chunk.byteLength; }
+  const reader = request.body?.getReader(); if (!reader) throw new InputError('Envie os dados.');
+  let length = 0; const chunks = [];
+  while (true) { const { done, value } = await reader.read(); if (done) break; length += value.length; if (length > MAX_BODY) { await reader.cancel(); throw new InputError('Dados acima do limite de tamanho.'); } chunks.push(value); }
+  const buffer = new Uint8Array(length); let offset = 0; for (const chunk of chunks) { buffer.set(chunk, offset); offset += chunk.length; }
   try { return JSON.parse(new TextDecoder().decode(buffer)); } catch { throw new InputError('JSON inválido.'); }
 }
-function text(value, max) {
-  if (value === undefined) return '';
-  if (typeof value !== 'string' || value.length > max) throw new InputError(`Texto inválido ou maior que ${max} caracteres.`);
-  return value;
+function text(value, max) { if (value === undefined) return ''; if (typeof value !== 'string' || value.length > max) throw new InputError('Texto inválido ou acima do limite.'); return value; }
+function normalize(body, code) {
+  if (!body || typeof body !== 'object' || body.committee !== code || typeof body.hasVeto !== 'boolean') throw new InputError('Formulário inválido.');
+  const state = body.state;
+  if (!state || !Array.isArray(state.vetoCountries) || state.vetoCountries.some(c => !COUNTRIES.includes(c)) || !Array.isArray(state.delegations)) throw new InputError('Delegações ou veto inválidos.');
+  const expected = COUNTRIES.slice(0, committeeByCode(code).countries);
+  if (state.delegations.length !== expected.length || expected.some(country => state.delegations.filter(d => d?.country === country).length !== 1)) throw new InputError('Lista de delegações inválida.');
+  return { committee: code, hasVeto: body.hasVeto, crisisTitle: text(body.crisisTitle, 500), crisisDetails: text(body.crisisDetails, 5000), state: { vetoCountries: COUNTRIES.filter(c => state.vetoCountries.includes(c)), delegations: expected.map(country => { const d = state.delegations.find(d => d.country === country); if (!VOTES.has(d.vote)) throw new InputError('Voto inválido.'); return { country, vote: d.vote, comment: text(d.comment, 4000) }; }) } };
 }
-function normalizeState(body) {
-  if (!body || typeof body !== 'object' || Array.isArray(body)) throw new InputError('Formulário inválido.');
-  const committee = text(body.committee, 20);
-  if (!COMMITTEES.has(committee)) throw new InputError('Comitê inválido.');
-  if (body.hasVeto !== undefined && typeof body.hasVeto !== 'boolean') throw new InputError('Escolha de veto inválida.');
-  const state = body.state || {};
-  if (!state || typeof state !== 'object' || Array.isArray(state)) throw new InputError('Dados das delegações inválidos.');
-  const vetoCountries = state.vetoCountries || [], delegations = state.delegations || [];
-  if (!Array.isArray(vetoCountries) || vetoCountries.some(c => !COUNTRIES.includes(c))) throw new InputError('País com veto inválido.');
-  if (!Array.isArray(delegations) || delegations.length > 10) throw new InputError('Delegações inválidas.');
-  const seen = new Set();
-  return {
-    committee, hasVeto: body.hasVeto === true, crisisTitle: text(body.crisisTitle, 500), crisisDetails: text(body.crisisDetails, 5000),
-    state: {
-      vetoCountries: COUNTRIES.filter(c => vetoCountries.includes(c)),
-      delegations: delegations.map(d => {
-        if (!d || !COUNTRIES.includes(d.country) || seen.has(d.country) || !VOTES.has(d.vote || '')) throw new InputError('Delegação ou voto inválido.');
-        seen.add(d.country);
-        return { country: d.country, comment: text(d.comment, 4000), vote: d.vote || '' };
-      })
-    }
-  };
-}
-function serializeRoom(row) {
-  return { id: row.id, committee: row.committee, hasVeto: Boolean(row.has_veto), crisisTitle: row.crisis_title, crisisDetails: row.crisis_details, state: JSON.parse(row.state_json), revision: row.revision, createdAt: row.created_at, updatedAt: row.updated_at };
-}
-function diffState(before, after) {
-  const changes = [], labels = { committee: 'Comitê', hasVeto: 'Veto', crisisTitle: 'Crise', crisisDetails: 'Detalhamento e resolução' };
-  for (const [key, label] of Object.entries(labels)) if (before[key] !== after[key]) changes.push({ field: key, label, before: before[key], after: after[key] });
+function diff(before, after) {
+  const changes = [], labels = { hasVeto: 'Veto', crisisTitle: 'Crise', crisisDetails: 'Detalhamento e resolução' };
+  for (const [field, label] of Object.entries(labels)) if (before[field] !== after[field]) changes.push({ field, label, before: before[field], after: after[field] });
   if (JSON.stringify(before.state.vetoCountries) !== JSON.stringify(after.state.vetoCountries)) changes.push({ field: 'vetoCountries', label: 'Países com veto', before: before.state.vetoCountries, after: after.state.vetoCountries });
-  for (const delegation of after.state.delegations) {
-    const previous = before.state.delegations.find(d => d.country === delegation.country) || { comment: '', vote: '' };
-    if (delegation.comment !== previous.comment) changes.push({ field: 'comment', country: delegation.country, label: `${delegation.country}: comentário`, before: previous.comment, after: delegation.comment });
-    if (delegation.vote !== previous.vote) changes.push({ field: 'vote', country: delegation.country, label: `${delegation.country}: voto`, before: VOTE_LABELS[previous.vote], after: VOTE_LABELS[delegation.vote] });
-  }
-  if (JSON.stringify(before.state.delegations.map(d => d.country)) !== JSON.stringify(after.state.delegations.map(d => d.country))) changes.push({ field: 'delegations', label: 'Delegações do comitê', before: before.state.delegations.map(d => d.country), after: after.state.delegations.map(d => d.country) });
-  // Keep history messages compact; the current form snapshot retains the full text.
+  for (const d of after.state.delegations) { const previous = before.state.delegations.find(p => p.country === d.country); if (d.comment !== previous.comment) changes.push({ field: 'comment', country: d.country, label: `${d.country}: comentário`, before: previous.comment, after: d.comment }); if (d.vote !== previous.vote) changes.push({ field: 'vote', country: d.country, label: `${d.country}: voto`, before: VOTE_LABELS[previous.vote], after: VOTE_LABELS[d.vote] }); }
   const excerpt = value => typeof value === 'string' && value.length > 200 ? `${value.slice(0, 200)}…` : value;
-  return changes.map(change => ({ ...change, before: excerpt(change.before), after: excerpt(change.after) }));
+  return changes.map(c => ({ ...c, before: excerpt(c.before), after: excerpt(c.after) }));
 }
-function randomKey() { return [...crypto.getRandomValues(new Uint8Array(32))].map(b => b.toString(16).padStart(2, '0')).join(''); }
-async function sha256(value) { return [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))].map(b => b.toString(16).padStart(2, '0')).join(''); }
-function constantTimeEqual(a, b) { if (a.length !== b.length) return false; let mismatch = 0; for (let i = 0; i < a.length; i++) mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i); return mismatch === 0; }
+function wsCredential(request) { return (request.headers.get('Sec-WebSocket-Protocol') || '').split(',').map(s => s.trim()).find(s => s.startsWith('mun-auth.'))?.slice(9); }
+async function digest(value) { return new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))); }
+function equal(a, b) { if (a.length !== b.length) return false; let mismatch = 0; for (let i = 0; i < a.length; i++) mismatch |= a[i] ^ b[i]; return mismatch === 0; }
+function base64(bytes) { return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
+function unbase64(value) { const raw = atob(value.replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(raw, c => c.charCodeAt(0)); }
+async function signingKey(env) { return crypto.subtle.importKey('raw', await digest(`${env.SUPERVISOR_USER}\0${env.SUPERVISOR_PASSWORD}`), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']); }
+async function makeToken(env, expiresAt) { const payload = base64(new TextEncoder().encode(JSON.stringify({ expiresAt, nonce: crypto.randomUUID() }))); const signature = await crypto.subtle.sign('HMAC', await signingKey(env), new TextEncoder().encode(payload)); return `${payload}.${base64(new Uint8Array(signature))}`; }
+async function verifyToken(env, token) {
+  if (!env.SUPERVISOR_USER || !env.SUPERVISOR_PASSWORD || !token || token.length > 1000) return null;
+  try { const [payload, signature, extra] = token.split('.'); if (!payload || !signature || extra) return null; const valid = await crypto.subtle.verify('HMAC', await signingKey(env), unbase64(signature), new TextEncoder().encode(payload)); if (!valid) return null; const session = JSON.parse(new TextDecoder().decode(unbase64(payload))); return Number.isFinite(session.expiresAt) && session.expiresAt > Date.now() ? session : null; } catch { return null; }
+}

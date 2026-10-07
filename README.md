@@ -1,32 +1,38 @@
-# MINIONU · formulários e supervisão ao vivo
+# MINIONU · acompanhamento geral dos 8 comitês
 
-Projeto original de apoio à simulação da ONU, exportado do [CodePen](https://codepen.io/editor/Algu-m-the-typescripter/pen/01a052fc-045a-7897-b632-42de817e5454), com backend e painel para acompanhar alterações.
+O formulário original do [CodePen](https://codepen.io/editor/Algu-m-the-typescripter/pen/01a052fc-045a-7897-b632-42de817e5454) agora envia suas alterações automaticamente ao painel geral. A cópia original exportada está em `codepen-original/`, com arquivos `src`, `dist`, configuração e licença preservados.
 
-## O que está incluído
+## Fluxo de uso
 
-- `codepen-original/`: exportação original completa, com `src`, `dist`, README e licença, sem alterações.
-- `index.html`, `script.js`, `style.css`: formulário original, com a ligação ao acompanhamento ao vivo na página. Os campos e a geração de delegações do CodePen foram mantidos.
-- `live-integration.js`: lê comitê, veto, países com veto, crise, detalhamento, comentários e votos; salva automaticamente após alterações.
-- `supervisor.html`: painel com estado atual, contagem de votos, comentários por delegação, destaque dos campos alterados e histórico das últimas 50 atualizações.
-- `backend/`: API Cloudflare Workers, banco D1 e distribuição de atualizações por WebSocket/Durable Objects.
-- `.github/workflows/pages.yml`: publicação manual do frontend no GitHub Pages.
+1. Cada comitê abre seu formulário pelo link correspondente ou seleciona o comitê no select original.
+2. O formulário conecta automaticamente ao backend. Crise, veto, países com veto, votos e comentários das delegações são salvos e transmitidos enquanto a pessoa preenche.
+3. A supervisão abre `supervisor.html` e entra com login e senha.
+4. O painel carrega os **8 comitês juntos**, com todas as delegações, votos, comentários, crise e detalhamento. Não há criação de salas, cadastro de chaves ou seleção de comitê no painel.
 
-## Como usar
+O resumo identifica quantos formulários estão abertos, e cada comitê mostra o estado da conexão. A atualização usa WebSocket, com agrupamento de digitação por até 150 ms. O formulário tenta reenviar o último estado se a conexão falhar, e o painel reconecta e recupera o estado e as últimas 50 atualizações.
 
-1. Publique a API e configure sua URL em `config.js` conforme abaixo.
-2. Abra o formulário e clique em **Criar sala de acompanhamento**.
-3. Copie o link de supervisão e compartilhe com a pessoa que acompanhará a sala.
-4. A pessoa supervisora abre o link e mantém o painel aberto. Os campos, votos e comentários passam a ser atualizados sem recarregar a página.
+## Links dos formulários
 
-As alterações são agrupadas por até 150 ms e enviadas em ordem. Em caso de falha de conexão, o formulário mantém o último estado pendente e tenta enviá-lo novamente; o painel reconecta automaticamente e recupera o estado e o histórico recente. O status na tela informa se há atualização pendente ou erro. A transmissão depende de conexão com a internet e da API estar publicada.
+Os links abaixo são relativos ao endereço publicado do site:
 
-Cada sala tem duas chaves: **edição** para o formulário e **supervisão** para acompanhar. A API rejeita alterações feitas com a chave de supervisão. Os links de supervisão usam o fragmento `#`, e a autenticação do WebSocket utiliza um subprotocolo, evitando credenciais na URL enviada ao servidor. O banco armazena somente os hashes das chaves. O formulário guarda a sessão no próprio navegador; o painel guarda a conexão apenas durante a sessão do navegador.
+| Comitê | Formulário |
+| --- | --- |
+| CDH | `index.html?comite=CDH` |
+| OMS | `index.html?comite=OMS` |
+| UNESCO | `index.html?comite=UNESCO` |
+| ONU Mulheres | `index.html?comite=ONUM` |
+| CSNU | `index.html?comite=CSNU` |
+| ACNUR | `index.html?comite=ACNUR` |
+| CDESC | `index.html?comite=CDESC` |
+| UNICEF | `index.html?comite=UNICEF` |
 
-O fluxo previsto é uma pessoa editando o formulário de cada sala e uma ou mais pessoas acompanhando. Abra salas distintas para formulários independentes. Edições simultâneas do mesmo formulário por vários dispositivos utilizam o último estado recebido.
+`supervisor.html` é o único endereço de acompanhamento. Cada comitê tem um formulário compartilhado e persistente no servidor; os links podem ser abertos em máquinas diferentes. O código original gera 9 delegações nos demais comitês e 10 no UNICEF; essa lista foi mantida. Os 8 comitês são os existentes no select original, confirmados pelo autor.
 
-## Publicar a API grátis na Cloudflare
+## Publicação inicial — feita pela administração
 
-No diretório do projeto, com Node.js instalado:
+O site precisa de uma publicação inicial da API e de uma definição de login e senha no servidor. Essa etapa é feita uma vez por quem administra a hospedagem; a pessoa supervisora apenas entra no painel. Senhas não ficam no código público nem são configuradas no navegador da supervisão.
+
+Com Node.js instalado, no diretório do projeto:
 
 ```sh
 npm ci
@@ -34,37 +40,43 @@ npx wrangler login
 npx wrangler d1 create minionu
 ```
 
-Copie o ID retornado para `database_id` em `backend/wrangler.toml`. Em `ALLOWED_ORIGINS`, mantenha a origem do site que chamará a API. Para GitHub Pages deste repositório, use `https://galaobiel4.github.io`, sem o caminho `/mun-system`.
+Copie o ID retornado para `database_id` em `backend/wrangler.toml`. A origem do frontend está em `ALLOWED_ORIGINS`; para o GitHub Pages deste projeto, é `https://galaobiel4.github.io`, sem `/mun-system`.
+
+Defina o login e uma senha forte por meio dos segredos da Cloudflare. Os comandos pedem os valores interativamente:
 
 ```sh
+npx wrangler secret put SUPERVISOR_USER --config backend/wrangler.toml
+npx wrangler secret put SUPERVISOR_PASSWORD --config backend/wrangler.toml
 npm run db:remote
 npm run deploy:api
 ```
 
-O comando de publicação retorna a URL da API. Configure `config.js`:
+Use uma senha longa e exclusiva. O painel emite uma sessão assinada com validade de 8 horas e limita tentativas de login. Os endpoints gerais e o WebSocket do painel exigem autenticação. Os formulários por comitê não exigem login, conforme o fluxo solicitado.
+
+O comando de publicação retorna a URL da API. Configure somente esse endereço em `config.js`:
 
 ```js
 export const API_BASE = 'https://minionu-api.SEUSUBDOMINIO.workers.dev';
 ```
 
-Nunca coloque senhas, tokens da conta Cloudflare ou chaves de salas no repositório.
+Não adicione senhas, tokens ou arquivos `.dev.vars` ao GitHub. Nenhuma credencial de produção é fornecida no repositório.
 
-## Publicar o site e o painel no GitHub Pages
+## Site e painel no GitHub Pages
 
-O repositório `galaobiel4/mun-system` é privado. A disponibilidade de Pages em repositórios privados depende do plano da conta; no GitHub Free, Pages está disponível para repositórios públicos. A privacidade do repositório foi preservada. Confira a [documentação do GitHub](https://docs.github.com/en/pages/getting-started-with-github-pages/github-pages-limits).
+O repositório `galaobiel4/mun-system` é privado; sua privacidade foi preservada. Pages em repositórios privados depende do plano da conta. No GitHub Free, Pages está disponível em repositórios públicos. Confira a [documentação de disponibilidade](https://docs.github.com/en/pages/getting-started-with-github-pages/github-pages-limits).
 
 Quando Pages estiver disponível para o repositório:
 
-1. Em **Settings → Pages**, selecione **GitHub Actions** como origem.
-2. Em **Actions → Publish GitHub Pages**, clique em **Run workflow**.
-3. Abra o endereço que aparecer na execução. O formulário fica na raiz do site e o painel em `supervisor.html`.
-4. Sempre que alterar os arquivos do site ou `config.js`, execute o workflow novamente.
+1. Em **Settings → Pages**, selecione **GitHub Actions**.
+2. Em **Actions → Publish GitHub Pages**, execute **Run workflow**.
+3. Abra a URL apresentada pela execução. Distribua os 8 links de formulário listados acima e o endereço `supervisor.html`.
+4. Após mudar os arquivos do site ou `config.js`, execute o workflow novamente.
 
-O workflow publica somente os arquivos estáticos do formulário e painel. GitHub Pages não executa o backend; a API permanece na Cloudflare. Veja [como criar um site Pages](https://docs.github.com/en/pages/getting-started-with-github-pages/creating-a-github-pages-site).
+GitHub Pages publica os arquivos estáticos; a API, o banco e a comunicação ao vivo rodam na Cloudflare. Veja [como criar o site Pages](https://docs.github.com/en/pages/getting-started-with-github-pages/creating-a-github-pages-site).
 
-## Planos gratuitos
+## Hospedagem gratuita
 
-Workers, D1 e Durable Objects com armazenamento SQLite têm planos gratuitos com limites. A documentação oficial informa 100.000 requisições/dia para Durable Objects; D1 inclui 5 milhões de linhas lidas/dia, 100.000 gravadas/dia e 5 GB. Ao exceder os limites gratuitos, operações podem falhar até a renovação da cota. Confira os limites atuais antes do evento: [Workers](https://developers.cloudflare.com/workers/platform/pricing/), [D1](https://developers.cloudflare.com/d1/platform/pricing/) e [Durable Objects](https://developers.cloudflare.com/durable-objects/platform/pricing/).
+Workers, D1 e Durable Objects com SQLite oferecem planos gratuitos com limites. D1 inclui 5 milhões de linhas lidas/dia, 100.000 gravadas/dia e 5 GB; Durable Objects inclui 100.000 requisições/dia. Quando uma cota gratuita é excedida, operações podem falhar até sua renovação. Confira os limites antes de um evento: [Workers](https://developers.cloudflare.com/workers/platform/pricing/), [D1](https://developers.cloudflare.com/d1/platform/pricing/) e [Durable Objects](https://developers.cloudflare.com/durable-objects/platform/pricing/).
 
 ## Desenvolvimento local
 
@@ -74,37 +86,30 @@ npm run db:local
 npm run dev:api
 ```
 
-Sirva os arquivos estáticos por HTTP na porta 5500 e configure temporariamente `API_BASE` como `http://localhost:8787`. Não abra os módulos diretamente via `file://`. As origens locais estão incluídas em `backend/wrangler.toml`.
+Para testar o login localmente, crie `backend/.dev.vars` com `SUPERVISOR_USER` e `SUPERVISOR_PASSWORD` exclusivos do desenvolvimento. Esse arquivo é ignorado pelo Git. Sirva o frontend por HTTP na porta 5500 e configure temporariamente `API_BASE` como `http://localhost:8787`.
 
-## API
+## Estrutura e API
 
-| Rota | Ação | Autorização |
-| --- | --- | --- |
-| `GET /api/health` | Disponibilidade da API | Sem chave |
-| `POST /api/rooms` | Cria sala e retorna chaves uma única vez | Origem permitida |
-| `GET /api/rooms/{id}` | Recupera o formulário | Chave de edição ou supervisão |
-| `PUT /api/rooms/{id}` | Salva e transmite alterações | Chave de edição |
-| `GET /api/rooms/{id}/live` | WebSocket de atualizações e estado inicial | Chave de edição ou supervisão |
+- `committees.js`: lista compartilhada dos 8 comitês e suas delegações.
+- `live-integration.js`: ligação do formulário original ao acompanhamento automático.
+- `supervisor.html`, `supervisor.js`, `supervisor.css`: login e painel geral.
+- `backend/src/index.js`: autenticação, persistência, presença e distribuição das atualizações.
+- `backend/migrations/`: histórico das migrações; a versão geral utiliza `committee_forms` e `committee_events`.
+- `codepen-original/`: exportação original sem alterações.
 
-HTTP usa `Authorization: Bearer CHAVE`. O WebSocket usa os subprotocolos `mun-live` e `mun-auth.CHAVE`. O objeto enviado por POST/PUT tem o formato:
+| Rota | Uso |
+| --- | --- |
+| `POST /api/auth/login` | Login e senha; retorna sessão de supervisão |
+| `GET /api/dashboard` | Estado dos 8 comitês, presença e histórico; exige sessão |
+| `GET /api/dashboard/live` | Atualizações gerais por WebSocket; exige sessão |
+| `GET /api/committees/{codigo}` | Abre automaticamente o formulário do comitê |
+| `PUT /api/committees/{codigo}` | Salva e distribui alterações |
+| `GET /api/committees/{codigo}/live` | Conexão do formulário e indicação de presença |
 
-```json
-{
-  "committee": "UNICEF",
-  "hasVeto": false,
-  "crisisTitle": "Título da crise",
-  "crisisDetails": "Detalhamento e resolução",
-  "state": {
-    "vetoCountries": [],
-    "delegations": [
-      { "country": "Brasil", "comment": "Comentário da delegação", "vote": "favoravel" }
-    ]
-  }
-}
-```
+O painel usa `Authorization: Bearer SESSAO` em HTTP e os subprotocolos `mun-live` e `mun-auth.SESSAO` no WebSocket. A sessão fica em `sessionStorage`, é eliminada ao sair e precisa ser renovada ao expirar. O backend valida comitê, delegações e votos; textos são exibidos sem interpretar HTML.
 
-Votos aceitos: `favoravel`, `abstido`, `contra` ou vazio. Os dados são validados, salvos com consultas parametrizadas e exibidos como texto no painel.
+O estado atual mantém textos completos; o histórico usa trechos de até 200 caracteres. O fluxo de edição previsto é um formulário por comitê; se vários dispositivos editarem o mesmo comitê simultaneamente, prevalece o último estado recebido. O painel indica conexões abertas, não a atividade de foco de cada janela.
 
-Os avisos do histórico usam trechos de até 200 caracteres para facilitar a leitura. O estado atual preserva os textos completos. A verificação local cobriu criação de sala, transmissão WebSocket, permissões de supervisão, recuperação do histórico e persistência; no navegador, foram conferidos voto, comentário, detalhamento e recuperação do formulário após recarregar. A implantação remota ainda depende da configuração Cloudflare e Pages descrita acima.
+## Verificação realizada
 
-As regras e a lista de países geradas pela função `selecao` seguem o código original; a integração acrescenta persistência e supervisão, sem reinterpretar as regras da simulação.
+O backend local foi verificado com login válido e inválido, sessões adulteradas e expiradas, 8 formulários conectados ao mesmo tempo, isolamento dos dados entre comitês, presença, desconexão e recuperação do histórico. No navegador, o painel exibiu os 8 comitês abertos e 73 delegações; mudanças de crise, voto e comentário em comitês diferentes chegaram à mesma tela. A implantação remota e as credenciais de produção dependem da publicação inicial descrita acima.
