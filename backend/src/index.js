@@ -1,5 +1,6 @@
 import { COMMITTEES, COUNTRIES, committeeByCode, emptyForm } from '../../committees.js';
-const MAX_BODY = 64000, SESSION_MS = 8 * 60 * 60 * 1000;
+import { handleAccounts, verifySession } from './users.js';
+const MAX_BODY = 64000;
 const VOTES = new Set(['', 'favoravel', 'abstido', 'contra']);
 const VOTE_LABELS = { '': 'Sem voto', favoravel: 'Favorável', abstido: 'Abstido', contra: 'Contra' };
 const json = (data, status = 200, headers = {}) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers } });
@@ -16,31 +17,16 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, { status: allowed ? 204 : 403, headers: cors });
     if (!allowed) return respond({ error: 'Origem não autorizada.' }, 403);
     try {
-      if (url.pathname === '/api/auth/login' && request.method === 'POST') {
-        const credentials = supervisorCredentials(env);
-        if (!credentials.length) return respond({ error: 'O administrador ainda precisa ativar o login do painel no servidor.' }, 503);
-        const fingerprint = base64(await digest(request.headers.get('CF-Connecting-IP') || 'local'));
-        const limit = await env.DASHBOARD.get(env.DASHBOARD.idFromName('all-committees')).fetch('https://dashboard.internal/login-attempt', { method: 'POST', body: JSON.stringify({ fingerprint }) });
-        if (limit.status === 429) return respond({ error: 'Muitas tentativas. Aguarde um minuto e tente novamente.' }, 429);
-        const body = await readJson(request);
-        if (!body || typeof body !== 'object' || Array.isArray(body)) throw new InputError('Login inválido.');
-        const user = text(body.username, 100), password = text(body.password, 200);
-        const userHash = await digest(user), passwordHash = await digest(password);
-        let credential;
-        for (const item of credentials) if (equal(userHash, await digest(item.user)) && equal(passwordHash, await digest(item.password))) credential = item;
-        if (!credential) return respond({ error: 'Login ou senha inválidos.' }, 401);
-        const expiresAt = Date.now() + SESSION_MS;
-        return respond({ token: await makeToken(credential, expiresAt), expiresAt });
-      }
+      if (url.pathname.startsWith('/api/auth/') || url.pathname === '/api/users' || url.pathname.startsWith('/api/users/')) return await handleAccounts(request, env, respond);
       if (url.pathname === '/api/dashboard' || url.pathname === '/api/dashboard/live') {
         if (request.method !== 'GET') return respond({ error: 'Método não permitido.' }, 405);
         const live = url.pathname.endsWith('/live');
         const token = live ? wsCredential(request) : request.headers.get('Authorization')?.replace(/^Bearer\s+/i, '');
-        const session = await verifyToken(env, token);
+        const session = await verifySession(env, token);
         if (!session) return respond({ error: 'Entre com login e senha para acompanhar os comitês.' }, 401);
         if (live && request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return respond({ error: 'Esta rota exige WebSocket.' }, 426);
         const stub = env.DASHBOARD.get(env.DASHBOARD.idFromName('all-committees'));
-        const headers = new Headers(request.headers); headers.set('x-session-expires', String(session.expiresAt));
+        const headers = new Headers(request.headers); headers.set('x-session-expires', String(session.expiresAt)); headers.set('x-session-user', session.user.id);
         const response = await stub.fetch(new Request(`https://dashboard.internal/${live ? 'connect' : 'snapshot'}`, { headers }));
         return live ? response : respond(await response.json(), response.status);
       }
@@ -145,9 +131,17 @@ export class GlobalDashboard {
       return json({ ok: true });
     }
     if (path === '/snapshot') return json(await this.snapshot());
+    if (path === '/revoke-user' && request.method === 'POST') {
+      const { userId } = await request.json();
+      for (const socket of this.state.getWebSockets()) {
+        const attachment = socket.deserializeAttachment();
+        if (!attachment?.userId || attachment.userId === userId) { try { socket.close(1008, 'Acesso revogado.'); } catch {} }
+      }
+      return json({ ok: true });
+    }
     if (path === '/connect') {
       const data = await this.snapshot(), pair = new WebSocketPair();
-      this.state.acceptWebSocket(pair[1]); pair[1].serializeAttachment({ expiresAt: Number(request.headers.get('x-session-expires')) });
+      this.state.acceptWebSocket(pair[1]); pair[1].serializeAttachment({ expiresAt: Number(request.headers.get('x-session-expires')), userId: request.headers.get('x-session-user') });
       pair[1].send(JSON.stringify(data));
       return new Response(null, { status: 101, webSocket: pair[0], headers: { 'Sec-WebSocket-Protocol': 'mun-live' } });
     }
@@ -192,21 +186,4 @@ function diff(before, after) {
   return changes.map(c => ({ ...c, before: excerpt(c.before), after: excerpt(c.after) }));
 }
 function wsCredential(request) { return (request.headers.get('Sec-WebSocket-Protocol') || '').split(',').map(s => s.trim()).find(s => s.startsWith('mun-auth.'))?.slice(9); }
-async function digest(value) { return new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))); }
-function equal(a, b) { if (a.length !== b.length) return false; let mismatch = 0; for (let i = 0; i < a.length; i++) mismatch |= a[i] ^ b[i]; return mismatch === 0; }
-function base64(bytes) { return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
-function unbase64(value) { const raw = atob(value.replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(raw, c => c.charCodeAt(0)); }
-function supervisorCredentials(env) {
-  return [
-    { user: env.SUPERVISOR_USER, password: env.SUPERVISOR_PASSWORD },
-    { user: env.SUPERVISOR_USER_2, password: env.SUPERVISOR_PASSWORD_2 }
-  ].filter(item => item.user && item.password);
-}
-async function signingKey(credential) { return crypto.subtle.importKey('raw', await digest(`${credential.user}\0${credential.password}`), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']); }
-async function makeToken(credential, expiresAt) { const payload = base64(new TextEncoder().encode(JSON.stringify({ expiresAt, nonce: crypto.randomUUID() }))); const signature = await crypto.subtle.sign('HMAC', await signingKey(credential), new TextEncoder().encode(payload)); return `${payload}.${base64(new Uint8Array(signature))}`; }
-async function verifyToken(env, token) {
-  const credentials = supervisorCredentials(env);
-  if (!credentials.length || !token || token.length > 1000) return null;
-  try { const [payload, signature, extra] = token.split('.'); if (!payload || !signature || extra) return null; const data = new TextEncoder().encode(payload), signed = unbase64(signature); let valid = false; for (const credential of credentials) valid = (await crypto.subtle.verify('HMAC', await signingKey(credential), signed, data)) || valid; if (!valid) return null; const session = JSON.parse(new TextDecoder().decode(unbase64(payload))); return Number.isFinite(session.expiresAt) && session.expiresAt > Date.now() ? session : null; } catch { return null; }
-}
 

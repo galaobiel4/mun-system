@@ -6,6 +6,13 @@ async function call(path, method = 'GET', body, token) {
   const data = await response.json(); if (!response.ok) { const error = new Error(data.error || 'Falha ao conectar.'); error.status = response.status; throw error; } return data;
 }
 export const login = (username, password) => call('/api/auth/login', 'POST', { username, password });
+export const authStatus = () => call('/api/auth/status');
+export const setupAccount = body => call('/api/auth/setup', 'POST', body);
+export const currentUser = token => call('/api/auth/me', 'GET', undefined, token);
+export const endSession = token => call('/api/auth/logout', 'POST', {}, token);
+export const listUsers = (token, offset = 0) => call(`/api/users?offset=${offset}`, 'GET', undefined, token);
+export const createUser = (token, body) => call('/api/users', 'POST', body, token);
+export const updateUser = (token, id, body) => call(`/api/users/${encodeURIComponent(id)}`, 'PUT', body, token);
 export const loadDashboard = token => call('/api/dashboard', 'GET', undefined, token);
 export const loadForm = code => call(`/api/committees/${encodeURIComponent(code)}`);
 export const saveForm = (code, form) => call(`/api/committees/${encodeURIComponent(code)}`, 'PUT', form);
@@ -42,3 +49,4 @@ export function createAutosave(code, onStatus = () => {}) {
   enqueue.hasPending = () => Boolean(pending || busy);
   return enqueue;
 }
+

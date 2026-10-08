@@ -1,8 +1,9 @@
-import { login, loadDashboard, watchDashboard } from './client.js';
+import { login, loadDashboard, watchDashboard, authStatus, setupAccount, currentUser, endSession, listUsers, createUser, updateUser } from './client.js';
 import { COMMITTEES } from './committees.js';
 const $ = id => document.getElementById(id), SESSION = 'minionu-supervisor-session';
 const votes = { '': ['Sem voto', ''], favoravel: ['Favorável', 'yes'], abstido: ['Abstido', 'neutral'], contra: ['Contra', 'no'] };
 let stop, expiry, generation = 0, models = new Map();
+let activeSession, signedInUser, nextUsersOffset = null, passwordUser;
 const node = (tag, text, cls) => { const el = document.createElement(tag); if (text !== undefined) el.textContent = text; if (cls) el.className = cls; return el; };
 function status(message, cls = '') { $('status').textContent = message; $('status').className = `status ${cls}`; }
 function format(value) { if (Array.isArray(value)) return value.join(', ') || 'Nenhum'; if (typeof value === 'boolean') return value ? 'Sim' : 'Não'; return value || 'Vazio'; }
@@ -59,12 +60,13 @@ function consume(update) {
   renderOverview(); while ($('events').children.length > 50) $('events').lastElementChild.remove();
   if (!$('events').children.length) $('events').append(node('p', 'Nenhuma alteração recebida ainda.', 'empty'));
 }
-function logout(message = '') { generation++; stop?.(); clearTimeout(expiry); sessionStorage.removeItem(SESSION); models.clear(); $('committee-grid').replaceChildren(); $('overview').replaceChildren(); $('events').replaceChildren(); $('panel').hidden = true; $('login-area').hidden = false; $('password').value = ''; $('login-error').textContent = message; }
+function logout(message = '') { generation++; stop?.(); clearTimeout(expiry); activeSession = undefined; signedInUser = undefined; $('password-dialog').close(); $('reset-password-form').reset(); $('create-user-form').reset(); $('users-area').hidden = true; $('users-toggle').setAttribute('aria-expanded', 'false'); $('users-list').replaceChildren(); sessionStorage.removeItem(SESSION); models.clear(); $('committee-grid').replaceChildren(); $('overview').replaceChildren(); $('events').replaceChildren(); $('panel').hidden = true; $('login-area').hidden = false; $('password').value = ''; $('login-error').textContent = message; }
 async function enter(session) {
   const current = ++generation; stop?.(); clearTimeout(expiry);
   if (session.expiresAt <= Date.now()) { logout('Sessão expirada. Entre novamente.'); return; }
   try {
-    const snapshot = await loadDashboard(session.token); if (current !== generation) return;
+    const [snapshot, identity] = await Promise.all([loadDashboard(session.token), currentUser(session.token)]); if (current !== generation) return;
+    activeSession = session; signedInUser = identity.user;
     consume(snapshot); $('login-area').hidden = true; $('panel').hidden = false; sessionStorage.setItem(SESSION, JSON.stringify(session)); $('password').value = '';
     expiry = setTimeout(() => logout('Sessão expirada. Entre novamente.'), session.expiresAt - Date.now());
     stop = watchDashboard(session.token, update => { if (current === generation) consume(update); }, (state, error) => {
@@ -78,5 +80,64 @@ $('login-form').addEventListener('submit', async event => {
   try { await enter(await login($('username').value.trim(), $('password').value)); } catch (error) { $('login-error').textContent = error.message; }
   finally { $('login-button').disabled = false; }
 });
-$('logout').addEventListener('click', () => logout());
+$('logout').addEventListener('click', () => { const token = activeSession?.token; logout(); if (token) endSession(token).catch(() => {}); });
+function usersMessage(message, error = false) { $('users-message').textContent = message; $('users-message').className = error ? 'error-text' : 'success-text'; }
+async function loadUsers(append = false) {
+  const token = activeSession?.token; if (!token) return;
+  const data = await listUsers(token, append ? nextUsersOffset : 0); if (activeSession?.token !== token) return;
+  if (!append) $('users-list').replaceChildren();
+  for (const user of data.users) {
+    const row = node('tr'), identity = node('td'), actions = node('td'), own = user.id === signedInUser.id;
+    identity.append(node('strong', user.displayName), node('div', `${user.username}${own ? ' · você' : ''}`, 'meta'));
+    const reset = node('button', 'Alterar senha', 'secondary'); reset.type = 'button';
+    reset.addEventListener('click', () => { passwordUser = user; $('reset-password-form').reset(); $('reset-error').textContent = ''; $('password-dialog-user').textContent = `${user.displayName} · ${user.username}`; $('password-dialog').showModal(); $('reset-password').focus(); });
+    const toggle = node('button', user.active ? 'Desativar' : 'Ativar', 'secondary'); toggle.type = 'button'; toggle.disabled = own;
+    if (own) toggle.title = 'Você não pode desativar seu próprio acesso.';
+    toggle.addEventListener('click', async () => {
+      toggle.disabled = true;
+      try { await updateUser(activeSession.token, user.id, { active: !user.active }); await loadUsers(); usersMessage(user.active ? 'Acesso desativado e sessões encerradas.' : 'Acesso ativado.'); }
+      catch (error) { usersMessage(error.message, true); } finally { toggle.disabled = own; }
+    });
+    actions.append(reset, toggle); row.append(identity, node('td', user.active ? 'Ativo' : 'Desativado'), actions); $('users-list').append(row);
+  }
+  nextUsersOffset = data.nextOffset; $('users-more').hidden = nextUsersOffset === null;
+}
+$('users-toggle').addEventListener('click', async () => {
+  const open = $('users-area').hidden; $('users-area').hidden = !open; $('users-toggle').setAttribute('aria-expanded', String(open));
+  if (open) { try { await loadUsers(); usersMessage(''); } catch (error) { usersMessage(error.message, true); } }
+});
+$('users-more').addEventListener('click', async () => { $('users-more').disabled = true; try { await loadUsers(true); } catch (error) { usersMessage(error.message, true); } finally { $('users-more').disabled = false; } });
+$('create-user-form').addEventListener('submit', async event => {
+  event.preventDefault(); const button = event.submitter; button.disabled = true;
+  try {
+    if ($('new-user-password').value !== $('new-user-confirm').value) throw new Error('As senhas não conferem.');
+    await createUser(activeSession.token, { displayName: $('new-user-name').value.trim(), username: $('new-user-login').value.trim(), password: $('new-user-password').value });
+    $('create-user-form').reset(); await loadUsers(); usersMessage('Usuário criado. Ele já pode entrar no painel.');
+  } catch (error) { usersMessage(error.message, true); } finally { button.disabled = false; }
+});
+$('password-cancel').addEventListener('click', () => { $('password-dialog').close(); $('reset-password-form').reset(); });
+$('reset-password-form').addEventListener('submit', async event => {
+  event.preventDefault(); const button = event.submitter; button.disabled = true;
+  try {
+    if ($('reset-password').value !== $('reset-confirm').value) throw new Error('As senhas não conferem.');
+    const result = await updateUser(activeSession.token, passwordUser.id, { password: $('reset-password').value });
+    $('password-dialog').close(); $('reset-password-form').reset();
+    if (result.sessionRevoked) logout('Senha alterada. Entre com sua nova senha.'); else usersMessage('Senha alterada. As sessões anteriores desse usuário foram encerradas.');
+  } catch (error) { $('reset-error').textContent = error.message; } finally { button.disabled = false; }
+});
+$('setup-form').addEventListener('submit', async event => {
+  event.preventDefault(); const button = event.submitter; button.disabled = true; $('setup-error').textContent = '';
+  try {
+    if ($('setup-password').value !== $('setup-confirm').value) throw new Error('As senhas não conferem.');
+    const session = await setupAccount({ activationPassword: $('activation-password').value, displayName: $('setup-name').value.trim(), username: $('setup-username').value.trim(), password: $('setup-password').value });
+    $('setup-form').reset(); $('setup-form').hidden = true; $('login-form').hidden = false; await enter(session);
+  } catch (error) { $('setup-error').textContent = error.message; } finally { button.disabled = false; }
+});
+async function showAuthState() {
+  try { const state = await authStatus(); $('setup-form').hidden = !state.needsSetup || !state.canSetup; $('login-form').hidden = state.needsSetup && state.canSetup;
+    if (state.needsSetup && !state.canSetup) $('login-error').textContent = 'Configure a senha de ativação administrativa no servidor para iniciar o primeiro acesso.';
+  } catch (error) { $('login-error').textContent = error.message; }
+}
+await showAuthState();
 try { const session = JSON.parse(sessionStorage.getItem(SESSION) || 'null'); if (session) await enter(session); } catch { logout(); }
+

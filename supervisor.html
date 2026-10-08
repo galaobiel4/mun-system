@@ -5,15 +5,44 @@
   <section id="login-area" class="login-shell">
     <p class="eyebrow">MINIONU · SUPERVISÃO</p><h1>Acompanhamento geral</h1><p>Entre para acompanhar os 8 comitês e todas as delegações ao vivo.</p>
     <form id="login-form" class="login-card"><label>Login<input id="username" autocomplete="username" required maxlength="100"></label><label>Senha<input id="password" type="password" autocomplete="current-password" required maxlength="200"></label><button id="login-button" type="submit">Entrar no painel</button><p id="login-error" class="error-text" role="alert"></p></form>
+    <form id="setup-form" class="login-card" hidden>
+      <h2>Ativar primeiro administrador</h2><p>Confirme a senha administrativa já configurada para ativar seu acesso. Depois você poderá criar os demais usuários no painel.</p>
+      <label>Senha administrativa atual<input id="activation-password" type="password" autocomplete="off" required maxlength="200"></label>
+      <label>Seu nome<input id="setup-name" required maxlength="100" autocomplete="name"></label>
+      <label>Login<input id="setup-username" required minlength="3" maxlength="80" pattern="[A-Za-z0-9._-]+" autocomplete="username"></label>
+      <label>Senha para entrar no painel<input id="setup-password" type="password" required minlength="12" maxlength="200" autocomplete="new-password"></label>
+      <label>Confirmar senha<input id="setup-confirm" type="password" required minlength="12" maxlength="200" autocomplete="new-password"></label>
+      <button type="submit">Ativar e entrar</button><p id="setup-error" class="error-text" role="alert"></p>
+    </form>
     <a href="index.html">Abrir formulário de comitê</a>
   </section>
   <main id="panel" class="wrap" hidden>
-    <header><div><p class="eyebrow">MINIONU</p><h1>Acompanhamento geral</h1><p>Todos os comitês e delegações na mesma tela.</p></div><div class="header-controls"><span id="status" class="status" role="status">Conectando…</span><button id="logout" class="secondary">Sair</button></div></header>
+    <header><div><p class="eyebrow">MINIONU</p><h1>Acompanhamento geral</h1><p>Todos os comitês e delegações na mesma tela.</p></div><div class="header-controls"><span id="status" class="status" role="status">Conectando…</span><button id="users-toggle" class="secondary" aria-expanded="false" aria-controls="users-area">Gerenciar usuários</button><button id="logout" class="secondary">Sair</button></div></header>
+    <section id="users-area" class="events-card users-area" hidden>
+      <h2>Usuários do painel</h2><p>Todos os usuários têm acesso de supervisão. Cadastros e alterações são salvos imediatamente.</p>
+      <form id="create-user-form" class="user-form">
+        <label>Nome<input id="new-user-name" required maxlength="100" autocomplete="off"></label>
+        <label>Login<input id="new-user-login" required minlength="3" maxlength="80" pattern="[A-Za-z0-9._-]+" autocomplete="off"></label>
+        <label>Senha <small>(mínimo de 12 caracteres)</small><input id="new-user-password" type="password" required minlength="12" maxlength="200" autocomplete="new-password"></label>
+        <label>Confirmar senha<input id="new-user-confirm" type="password" required minlength="12" maxlength="200" autocomplete="new-password"></label>
+        <button type="submit">Criar usuário</button>
+      </form>
+      <p id="users-message" role="status" aria-live="polite"></p>
+      <div class="table-scroll"><table class="users-table"><thead><tr><th>Nome e login</th><th>Estado</th><th>Ações</th></tr></thead><tbody id="users-list"></tbody></table></div>
+      <button id="users-more" class="secondary" hidden>Carregar mais usuários</button>
+    </section>
     <section class="summary"><div><strong id="committee-count">8</strong><span>Comitês</span></div><div><strong id="online-count">0</strong><span>Comitês com formulário aberto</span></div><div><strong id="delegation-count">0</strong><span>Delegações acompanhadas</span></div></section>
     <nav id="overview" class="overview" aria-label="Visão geral dos comitês"></nav>
     <section id="committee-grid" class="committee-grid" aria-label="Todos os comitês e delegações"></section>
     <section class="events-card"><h2>Últimas alterações · todos os comitês</h2><p>Comitê, delegação e campo alterado identificados em cada aviso.</p><div id="events"></div></section>
   </main>
+  <dialog id="password-dialog"><form id="reset-password-form" class="login-card">
+    <h2>Alterar senha</h2><p id="password-dialog-user"></p>
+    <label>Nova senha<input id="reset-password" type="password" minlength="12" maxlength="200" required autocomplete="new-password"></label>
+    <label>Confirmar senha<input id="reset-confirm" type="password" minlength="12" maxlength="200" required autocomplete="new-password"></label>
+    <p id="reset-error" class="error-text" role="alert"></p><div class="dialog-actions"><button type="button" id="password-cancel" class="secondary">Cancelar</button><button type="submit">Salvar senha</button></div>
+  </form></dialog>
   <script type="module" src="supervisor.js"></script>
 </body>
 </html>
+
