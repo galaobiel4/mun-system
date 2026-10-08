@@ -1,4 +1,5 @@
 import { COMMITTEES, COUNTRIES, committeeByCode, emptyForm } from '../../committees.js';
+import { calculateVote } from '../../voting.js';
 const MAX_BODY = 64000, SESSION_MS = 8 * 60 * 60 * 1000;
 const VOTES = new Set(['', 'favoravel', 'abstido', 'contra']);
 const VOTE_LABELS = { '': 'Sem voto', favoravel: 'Favorável', abstido: 'Abstido', contra: 'Contra' };
@@ -40,15 +41,23 @@ export default {
         const response = await stub.fetch(new Request(`https://dashboard.internal/${live ? 'connect' : 'snapshot'}`, { headers }));
         return live ? response : respond(await response.json(), response.status);
       }
-      const match = url.pathname.match(/^\/api\/committees\/([A-Z0-9_-]+)(\/live)?$/);
+      const match = url.pathname.match(/^\/api\/committees\/([A-Z0-9_-]+)(\/live|\/proposals)?$/);
       if (!match || !committeeByCode(match[1])) return respond({ error: 'Comitê não encontrado.' }, 404);
-      const [, code, live] = match;
-      if (!['GET', 'PUT'].includes(request.method) || (live && request.method !== 'GET')) return respond({ error: 'Método não permitido.' }, 405);
+      const [, code, suffix] = match, live = suffix === '/live', finalizing = suffix === '/proposals';
+      if (!(live ? request.method === 'GET' : finalizing ? request.method === 'POST' : ['GET', 'PUT'].includes(request.method))) return respond({ error: 'Método não permitido.' }, 405);
       if (live && request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return respond({ error: 'Esta rota exige WebSocket.' }, 426);
       const stub = env.ROOMS.get(env.ROOMS.idFromName(`committee:${code}`));
       const headers = new Headers(request.headers); headers.set('x-committee-code', code);
-      const form = request.method === 'PUT' ? normalize(await readJson(request), code) : undefined;
-      const response = await stub.fetch(new Request(`https://committee.internal/${live ? 'connect' : form ? 'save' : 'snapshot'}`, { method: form ? 'POST' : 'GET', headers, body: form ? JSON.stringify(form) : undefined }));
+      let form;
+      if (request.method === 'PUT' || finalizing) {
+        const body = await readJson(request);
+        form = normalize(body, code);
+        if (finalizing) {
+          if (typeof body.requestId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.requestId)) throw new InputError('Identificador da proposta inválido.');
+          form.requestId = body.requestId.toLowerCase();
+        }
+      }
+      const response = await stub.fetch(new Request(`https://committee.internal/${live ? 'connect' : finalizing ? 'finalize' : form ? 'save' : 'snapshot'}`, { method: form ? 'POST' : 'GET', headers, body: form ? JSON.stringify(form) : undefined }));
       return live ? response : respond(await response.json(), response.status);
     } catch (error) {
       if (error instanceof InputError) return respond({ error: error.message }, 400);
@@ -74,23 +83,45 @@ export class RoomLiveUpdates {
       await this.env.DB.prepare('INSERT INTO committee_forms (code, form_json, revision, created_at, updated_at) VALUES (?, ?, 0, ?, ?)').bind(code, JSON.stringify(emptyForm(code)), now, now).run();
       row = await this.env.DB.prepare('SELECT * FROM committee_forms WHERE code = ?').bind(code).first();
     }
+    const history = await this.env.DB.prepare('SELECT proposal_json FROM committee_proposals WHERE committee_code = ? ORDER BY voting_round DESC').bind(code).all();
+    const proposals = history.results.map(proposal => JSON.parse(proposal.proposal_json));
+    const snapshot = () => ({ ...formSnapshot(row, proposals), activeEditors: this.active() });
     const path = new URL(request.url).pathname;
-    if (path === '/snapshot') return json(formSnapshot(row));
+    if (path === '/snapshot') return json(snapshot());
     if (path === '/connect') {
       const pair = new WebSocketPair(); this.state.acceptWebSocket(pair[1]); pair[1].serializeAttachment({ code });
-      pair[1].send(JSON.stringify({ type: 'form-snapshot', ...formSnapshot(row) }));
+      pair[1].send(JSON.stringify({ type: 'form-snapshot', ...snapshot() }));
       await this.publish({ type: 'presence', committee: code, activeEditors: this.active() });
       return new Response(null, { status: 101, webSocket: pair[0] });
     }
-    if (path === '/save' && request.method === 'POST') {
-      const form = await request.json(), changes = diff(JSON.parse(row.form_json), form);
-      if (!changes.length) return json(formSnapshot(row));
+    if ((path === '/save' || path === '/finalize') && request.method === 'POST') {
+      const body = await request.json(), form = normalize(body, code), before = hydrateForm(JSON.parse(row.form_json), code);
+      // A retried submission returns the saved result even after the next round starts.
+      if (path === '/finalize' && proposals.some(proposal => proposal.id === body.requestId)) return json(snapshot());
+      if (form.votingRound !== before.votingRound) return json({ error: 'Esta votação já foi encerrada ou está desatualizada. O formulário foi atualizado; confira a nova proposta antes de votar.', snapshot: snapshot() }, 409);
+      let proposal;
+      if (path === '/finalize') {
+        const result = calculateVote(code, form.state.delegations);
+        if (!form.proposalText.trim()) return json({ error: 'Escreva o texto da proposta antes de encerrar a votação.' }, 400);
+        if (result.status === 'pending') return json({ error: 'Registre o voto de todas as delegações antes de encerrar a votação.' }, 400);
+        proposal = { id: body.requestId, committee: code, proposalText: form.proposalText.trim(), crisisTitle: form.crisisTitle, crisisDetails: form.crisisDetails, delegations: form.state.delegations.map(delegation => ({ ...delegation })), ...result, createdAt: new Date().toISOString(), votingRound: form.votingRound };
+        form.proposalText = '';
+        form.votingRound++;
+        form.state.delegations = form.state.delegations.map(delegation => ({ ...delegation, vote: '' }));
+      }
+      const changes = diff(before, form);
+      if (proposal) {
+        const labels = { approved: 'aprovada', denied: 'negada', vetoed: 'vetada' };
+        changes.push({ field: 'proposal', label: `Proposta ${labels[proposal.status]}`, proposalId: proposal.id, status: proposal.status, before: null, after: proposal.proposalText.slice(0, 200) });
+      }
+      if (!changes.length) return json(snapshot());
       const now = new Date().toISOString(), revision = row.revision + 1;
       await this.env.DB.batch([
+        ...(proposal ? [this.env.DB.prepare('INSERT INTO committee_proposals (committee_code, id, voting_round, proposal_json, created_at) VALUES (?, ?, ?, ?, ?)').bind(code, proposal.id, proposal.votingRound, JSON.stringify(proposal), proposal.createdAt)] : []),
         this.env.DB.prepare('UPDATE committee_forms SET form_json = ?, revision = ?, updated_at = ? WHERE code = ?').bind(JSON.stringify(form), revision, now, code),
         this.env.DB.prepare('INSERT INTO committee_events (committee_code, revision, changes_json, created_at) VALUES (?, ?, ?, ?)').bind(code, revision, JSON.stringify(changes), now)
       ]);
-      const saved = { ...form, revision, updatedAt: now, createdAt: row.created_at, activeEditors: this.active() };
+      const saved = { ...form, proposals: proposal ? [proposal, ...proposals] : proposals, revision, updatedAt: now, createdAt: row.created_at, activeEditors: this.active() };
       const message = { type: 'form-update', ...saved, changes };
       for (const socket of this.state.getWebSockets()) { try { socket.send(JSON.stringify(message)); } catch {} }
       await this.publish(message);
@@ -99,7 +130,10 @@ export class RoomLiveUpdates {
     return json({ error: 'Rota não encontrada.' }, 404);
   }
   async publish(event) {
-    await this.env.DASHBOARD.get(this.env.DASHBOARD.idFromName('all-committees')).fetch('https://dashboard.internal/update', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(event) });
+    try {
+      const response = await this.env.DASHBOARD.get(this.env.DASHBOARD.idFromName('all-committees')).fetch('https://dashboard.internal/update', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(event) });
+      if (!response.ok) console.error('MINIONU: painel temporariamente indisponível:', response.status);
+    } catch (error) { console.error('MINIONU: atualização do painel pendente:', error.message); }
   }
   webSocketMessage(socket) { socket.close(1008, 'Esta conexão recebe atualizações apenas.'); }
   async webSocketClose(socket, code, reason) {
@@ -117,6 +151,7 @@ export class GlobalDashboard {
   fetch(request) { const work = this.queue.then(() => this.handle(request)); this.queue = work.catch(() => {}); return work; }
   async snapshot() {
     const rows = await this.env.DB.prepare('SELECT * FROM committee_forms').all();
+    const proposals = await this.env.DB.prepare('SELECT committee_code, proposal_json FROM committee_proposals ORDER BY voting_round DESC').all();
     const presence = await Promise.all(COMMITTEES.map(async committee => {
       const response = await this.env.ROOMS.get(this.env.ROOMS.idFromName(`committee:${committee.code}`)).fetch('https://committee.internal/presence'); return response.json();
     }));
@@ -125,7 +160,8 @@ export class GlobalDashboard {
       type: 'dashboard-snapshot',
       committees: COMMITTEES.map((committee, index) => {
         const row = rows.results.find(r => r.code === committee.code);
-        return { ...(row ? formSnapshot(row) : { ...emptyForm(committee.code), revision: 0, updatedAt: null }), name: committee.name, activeEditors: presence[index].activeEditors };
+        const history = proposals.results.filter(proposal => proposal.committee_code === committee.code).map(proposal => JSON.parse(proposal.proposal_json));
+        return { ...(row ? formSnapshot(row, history) : { ...emptyForm(committee.code), proposals: history, revision: 0, updatedAt: null }), name: committee.name, activeEditors: presence[index].activeEditors };
       }),
       recentEvents: history.results.map(event => ({ committee: event.committee_code, revision: event.revision, updatedAt: event.created_at, changes: JSON.parse(event.changes_json) }))
     };
@@ -161,7 +197,22 @@ export class GlobalDashboard {
   webSocketError(socket) { socket.close(1011, 'Erro de conexão.'); }
 }
 
-function formSnapshot(row) { return { ...JSON.parse(row.form_json), revision: row.revision, createdAt: row.created_at, updatedAt: row.updated_at }; }
+function formSnapshot(row, proposals = []) { return { ...hydrateForm(JSON.parse(row.form_json), row.code), proposals, revision: row.revision, createdAt: row.created_at, updatedAt: row.updated_at }; }
+
+// Existing rows predate proposal drafts, rounds, and server-owned voting rules.
+function hydrateForm(saved, code) {
+  const form = emptyForm(code), cleanText = (value, max) => typeof value === 'string' ? value.slice(0, max) : '';
+  form.crisisTitle = cleanText(saved?.crisisTitle, 500);
+  form.crisisDetails = cleanText(saved?.crisisDetails, 5000);
+  form.proposalText = cleanText(saved?.proposalText, 5000);
+  form.votingRound = Number.isSafeInteger(saved?.votingRound) && saved.votingRound >= 0 ? saved.votingRound : 0;
+  const delegations = Array.isArray(saved?.state?.delegations) ? saved.state.delegations : [];
+  form.state.delegations = form.state.delegations.map(delegation => {
+    const previous = delegations.find(candidate => candidate?.country === delegation.country);
+    return { ...delegation, comment: cleanText(previous?.comment, 4000), vote: VOTES.has(previous?.vote) ? previous.vote : '' };
+  });
+  return form;
+}
 async function readJson(request) {
   if (!request.headers.get('content-type')?.includes('application/json')) throw new InputError('Envie JSON.');
   const reader = request.body?.getReader(); if (!reader) throw new InputError('Envie os dados.');
@@ -172,15 +223,18 @@ async function readJson(request) {
 }
 function text(value, max) { if (value === undefined) return ''; if (typeof value !== 'string' || value.length > max) throw new InputError('Texto inválido ou acima do limite.'); return value; }
 function normalize(body, code) {
-  if (!body || typeof body !== 'object' || body.committee !== code || typeof body.hasVeto !== 'boolean') throw new InputError('Formulário inválido.');
+  if (!body || typeof body !== 'object' || Array.isArray(body) || body.committee !== code) throw new InputError('Formulário inválido.');
   const state = body.state;
-  if (!state || !Array.isArray(state.vetoCountries) || state.vetoCountries.some(c => !COUNTRIES.includes(c)) || !Array.isArray(state.delegations)) throw new InputError('Delegações ou veto inválidos.');
+  if (!state || !Array.isArray(state.delegations)) throw new InputError('Delegações inválidas.');
   const expected = COUNTRIES.slice(0, committeeByCode(code).countries);
   if (state.delegations.length !== expected.length || expected.some(country => state.delegations.filter(d => d?.country === country).length !== 1)) throw new InputError('Lista de delegações inválida.');
-  return { committee: code, hasVeto: body.hasVeto, crisisTitle: text(body.crisisTitle, 500), crisisDetails: text(body.crisisDetails, 5000), state: { vetoCountries: COUNTRIES.filter(c => state.vetoCountries.includes(c)), delegations: expected.map(country => { const d = state.delegations.find(d => d.country === country); if (!VOTES.has(d.vote)) throw new InputError('Voto inválido.'); return { country, vote: d.vote, comment: text(d.comment, 4000) }; }) } };
+  const votingRound = body.votingRound === undefined ? 0 : body.votingRound;
+  if (!Number.isSafeInteger(votingRound) || votingRound < 0 || votingRound >= Number.MAX_SAFE_INTEGER) throw new InputError('Rodada de votação inválida.');
+  const form = emptyForm(code);
+  return { ...form, crisisTitle: text(body.crisisTitle, 500), crisisDetails: text(body.crisisDetails, 5000), proposalText: text(body.proposalText, 5000), votingRound, state: { vetoCountries: form.state.vetoCountries, delegations: expected.map(country => { const d = state.delegations.find(d => d.country === country); if (!VOTES.has(d.vote)) throw new InputError('Voto inválido.'); return { country, vote: d.vote, comment: text(d.comment, 4000) }; }) } };
 }
 function diff(before, after) {
-  const changes = [], labels = { hasVeto: 'Veto', crisisTitle: 'Crise', crisisDetails: 'Detalhamento e resolução' };
+  const changes = [], labels = { hasVeto: 'Veto', crisisTitle: 'Crise', crisisDetails: 'Detalhamento e resolução', proposalText: 'Proposta em votação', votingRound: 'Rodada de votação' };
   for (const [field, label] of Object.entries(labels)) if (before[field] !== after[field]) changes.push({ field, label, before: before[field], after: after[field] });
   if (JSON.stringify(before.state.vetoCountries) !== JSON.stringify(after.state.vetoCountries)) changes.push({ field: 'vetoCountries', label: 'Países com veto', before: before.state.vetoCountries, after: after.state.vetoCountries });
   for (const d of after.state.delegations) { const previous = before.state.delegations.find(p => p.country === d.country); if (d.comment !== previous.comment) changes.push({ field: 'comment', country: d.country, label: `${d.country}: comentário`, before: previous.comment, after: d.comment }); if (d.vote !== previous.vote) changes.push({ field: 'vote', country: d.country, label: `${d.country}: voto`, before: VOTE_LABELS[previous.vote], after: VOTE_LABELS[d.vote] }); }
