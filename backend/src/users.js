@@ -126,6 +126,9 @@ export async function handleAccounts(request, env, respond) {
     await env.DB.prepare('DELETE FROM auth_sessions WHERE token_hash = ?').bind(encode(await digest(token))).run();
     return respond({ ok: true });
   }
+  for (const account of configured(env)) {
+    if (!(await env.DB.prepare('SELECT id FROM auth_users WHERE username = ?').bind(account.username).first())) await importConfigured(env, account);
+  }
   if (path === '/api/users' && request.method === 'GET') {
     const offset = Number(url.searchParams.get('offset') || 0);
     if (!Number.isSafeInteger(offset) || offset < 0) return respond({ error: 'Página inválida.' }, 400);
