@@ -1,4 +1,65 @@
+
+body {
+    background-color: #8aa5ba;
+    font-family: Helvetica;
+}
+
+/*HEADER que inclui o titulo*/
+.cabecalho {
+  background-color: white;
+  width:500px;
+}
+/* MINI ONU no topo da página */
+.titulo {
+  color: blue;
+  font-size: 1cm;
+  text-align: center;
+}
+
+p {
+  color:blue;
+}
+/*Divisória da */
+.div1 {
+  background-color:white;
+  width:700px
+}
+
+#comite {
+  color:blue;
+}
+.detalhamentocrise {
+  resize:none;
+  width:400px;
+  height:80px
+}
+
+.paises-veto {
+  display:none
+}
+
+#veto:checked ~ .paises-veto {
+  display: block;
+}
+.div2{
+  background-color:white;
+  width:600px
+}
+#pais {
+  background-color:white
+  width:600px
+}
+.comentarios{
+  resize:none;
+  
+}
+.votopais {
+  display: inline-block;
+  width: 110px; 
+}
+
 .connection-panel{background:#fff;padding:18px;border-radius:12px;max-width:900px;margin:16px 0;border:1px solid #c7d7e6;color:#172b4d}
 .connection-panel h2{margin-top:0}.connection-panel p{color:#425779}.connection-panel button{background:#2353d2;color:white;border:0;border-radius:6px;padding:10px 14px;margin:6px 6px 6px 0;cursor:pointer;font:inherit}.connection-panel input{padding:9px;border:1px solid #aabbd0;border-radius:5px;max-width:100%;font:inherit}.connection-panel label{display:block;margin:10px 0}.connection-panel details{margin:10px 0}.connection-fields{display:flex;align-items:end;gap:12px;flex-wrap:wrap}#supervisor-link{display:block;width:100%;margin-top:8px}#sync-status[data-status=error]{color:#a12626}#sync-status[data-status=saved]{color:#14673c}
 .cabecalho,.div1,.div2,#pais,#votacao{max-width:900px;width:100%;box-sizing:border-box;padding:12px}.detalhamentocrise,.crise,.comentarios{box-sizing:border-box;max-width:100%;font:inherit}.crise{width:400px;padding:6px}.detalhamentocrise{height:120px;padding:8px}.comentarios{width:500px;height:90px;padding:8px}#pais{background:white}#pais details{padding:10px;border-bottom:1px solid #d7e0e9}#votacao{background:#fff;margin-top:14px;padding:14px}.paises-veto{padding:10px}
 #proposal-panel,#voting-controls,#proposal-history,#recovered-draft{background:white;max-width:900px;box-sizing:border-box;padding:12px;margin-top:12px}#proposal-text{width:500px;max-width:100%;height:100px;box-sizing:border-box;font:inherit}#finish-voting{font:inherit;padding:5px 9px}#proposal-log article{border-top:1px solid #999;padding:10px 0}#proposal-log .proposal-text,#recovered-draft-text{white-space:pre-wrap;overflow-wrap:anywhere}#proposal-log table{border-collapse:collapse;width:100%}#proposal-log th,#proposal-log td{border:1px solid #aaa;padding:5px;text-align:left;vertical-align:top;overflow-wrap:anywhere}#proposal-log td{white-space:pre-wrap}#proposal-log .log-table{overflow-x:auto}#voting-message[data-status=error]{color:#a12626}
+

@@ -2,6 +2,7 @@ import { login, loadDashboard, watchDashboard } from './client.js';
 import { COMMITTEES } from './committees.js';
 const $ = id => document.getElementById(id), SESSION = 'minionu-supervisor-session';
 const votes = { '': ['Sem voto', ''], favoravel: ['Favorável', 'yes'], abstido: ['Abstido', 'neutral'], contra: ['Contra', 'no'] };
+const outcomes = { approved: 'Aprovada', denied: 'Negada', vetoed: 'Vetada' };
 let stop, expiry, generation = 0, models = new Map();
 const node = (tag, text, cls) => { const el = document.createElement(tag); if (text !== undefined) el.textContent = text; if (cls) el.className = cls; return el; };
 function status(message, cls = '') { $('status').textContent = message; $('status').className = `status ${cls}`; }
@@ -26,6 +27,7 @@ function renderCommittee(form, changes = []) {
   card.append(header, node('p', form.name || COMMITTEES.find(c => c.code === form.committee).name, 'committee-name'));
   const crisis = node('div', undefined, 'crisis'); crisis.append(node('small', 'Crise'), node('strong', form.crisisTitle || 'Nenhuma crise informada')); card.append(crisis);
   const details = node('div', undefined, 'crisis'); details.append(node('small', 'Detalhamento e resolução'), node('div', form.crisisDetails || 'Ainda não informado', 'description')); card.append(details);
+  const proposal = node('div', undefined, 'crisis'); proposal.append(node('small', 'Proposta em votação'), node('div', form.proposalText || 'Nenhuma proposta em votação', 'description')); card.append(proposal);
   card.append(node('div', form.hasVeto ? `Veto: sim · ${(form.state.vetoCountries || []).join(', ') || 'Nenhum país selecionado'}` : 'Veto: não', 'veto'));
   const counts = count(form), totals = node('div', undefined, 'totals');
   for (const [vote, [label, cls]] of Object.entries(votes)) totals.append(node('span', `${counts[vote]} ${label}`, cls)); card.append(totals);
@@ -35,6 +37,21 @@ function renderCommittee(form, changes = []) {
     const vote = node('td'); vote.append(node('span', votes[d.vote][0], `vote ${votes[d.vote][1]}`)); row.append(node('td', d.country), vote, node('td', d.comment || '—')); body.append(row);
   }
   table.append(body); const scroll = node('div', undefined, 'table-scroll'); scroll.append(table); card.append(scroll);
+  const history = node('details'), proposals = form.proposals || [];
+  history.append(node('summary', `Registro de propostas (${proposals.length})`));
+  if (!proposals.length) history.append(node('p', 'Nenhuma votação encerrada.'));
+  for (const proposal of proposals) {
+    const entry = node('article', undefined, 'crisis');
+    entry.append(node('h3', `Proposta ${proposal.votingRound + 1} · ${outcomes[proposal.status]}`), node('time', new Date(proposal.createdAt).toLocaleString('pt-BR')), node('div', proposal.proposalText, 'description'));
+    entry.append(node('p', `${proposal.counts.favoravel} favorável(is) · ${proposal.counts.contra} contra · ${proposal.counts.abstido} abstenção(ões). Maioria: ${proposal.majority}; necessários: ${proposal.requiredVotes} de ${proposal.validVotes} votos válidos.`));
+    if (proposal.vetoedBy.length) entry.append(node('p', `Veto: ${proposal.vetoedBy.join(', ')}`));
+    const breakdown = node('details'); breakdown.append(node('summary', 'Votos e contexto da proposta'));
+    breakdown.append(node('div', `Crise: ${proposal.crisisTitle || 'Não informada'}`, 'description'), node('div', proposal.crisisDetails || 'Sem detalhamento da crise.', 'description'));
+    const list = node('ul');
+    for (const delegation of proposal.delegations) list.append(node('li', `${delegation.country}: ${votes[delegation.vote][0]}${delegation.comment ? ` — ${delegation.comment}` : ''}`));
+    breakdown.append(list); entry.append(breakdown); history.append(entry);
+  }
+  card.append(history);
   card.append(node('p', form.updatedAt ? `Última atualização: ${new Date(form.updatedAt).toLocaleTimeString('pt-BR')}` : 'Aguardando abertura do formulário', 'meta'));
   const link = node('a', 'Abrir formulário deste comitê', 'form-link'); link.href = `index.html?comite=${encodeURIComponent(form.committee)}`; link.target = '_blank'; link.rel = 'noopener'; card.append(link);
   if (changes.length) { card.classList.remove('changed'); void card.offsetWidth; card.classList.add('changed'); }
