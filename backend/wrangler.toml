@@ -5,7 +5,7 @@ compatibility_date = "2026-10-07"
 [[d1_databases]]
 binding = "DB"
 database_name = "minionu"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "b4f01eb9-00f3-451b-b470-2755f703bdfd"
 migrations_dir = "migrations"
 
 [[durable_objects.bindings]]
