@@ -3,7 +3,7 @@ import { committeeByCode, emptyForm } from './committees.js';
 const $ = id => document.getElementById(id);
 const VETO = {brasil:'Brasil',india:'Índia',eua:'EUA',turquia:'Turquia',russia:'Rússia',china:'China',nigeria:'Nigéria',alemanha:'Alemanha',franca:'França',uk:'Reino Unido'};
 let activeCode, autosave, stopWatch, loading = false, generation = 0, lastRevision = -1;
-const status = (message, state = '') => { $('sync-status').textContent = message; $('sync-status').dataset.status = state; };
+const status = () => {};
 const draftKey = code => `minionu-draft.${code}`;
 function read() {
   return { committee: activeCode, hasVeto: $('veto').checked, crisisTitle: document.querySelector('.crise').value, crisisDetails: document.querySelector('.detalhamentocrise').value,
