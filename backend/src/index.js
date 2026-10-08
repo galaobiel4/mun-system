@@ -17,16 +17,20 @@ export default {
     if (!allowed) return respond({ error: 'Origem não autorizada.' }, 403);
     try {
       if (url.pathname === '/api/auth/login' && request.method === 'POST') {
-        if (!env.SUPERVISOR_USER || !env.SUPERVISOR_PASSWORD) return respond({ error: 'O administrador ainda precisa ativar o login do painel no servidor.' }, 503);
+        const credentials = supervisorCredentials(env);
+        if (!credentials.length) return respond({ error: 'O administrador ainda precisa ativar o login do painel no servidor.' }, 503);
         const fingerprint = base64(await digest(request.headers.get('CF-Connecting-IP') || 'local'));
         const limit = await env.DASHBOARD.get(env.DASHBOARD.idFromName('all-committees')).fetch('https://dashboard.internal/login-attempt', { method: 'POST', body: JSON.stringify({ fingerprint }) });
         if (limit.status === 429) return respond({ error: 'Muitas tentativas. Aguarde um minuto e tente novamente.' }, 429);
         const body = await readJson(request);
         if (!body || typeof body !== 'object' || Array.isArray(body)) throw new InputError('Login inválido.');
         const user = text(body.username, 100), password = text(body.password, 200);
-        if (!equal(await digest(user), await digest(env.SUPERVISOR_USER)) || !equal(await digest(password), await digest(env.SUPERVISOR_PASSWORD))) return respond({ error: 'Login ou senha inválidos.' }, 401);
+        const userHash = await digest(user), passwordHash = await digest(password);
+        let credential;
+        for (const item of credentials) if (equal(userHash, await digest(item.user)) && equal(passwordHash, await digest(item.password))) credential = item;
+        if (!credential) return respond({ error: 'Login ou senha inválidos.' }, 401);
         const expiresAt = Date.now() + SESSION_MS;
-        return respond({ token: await makeToken(env, expiresAt), expiresAt });
+        return respond({ token: await makeToken(credential, expiresAt), expiresAt });
       }
       if (url.pathname === '/api/dashboard' || url.pathname === '/api/dashboard/live') {
         if (request.method !== 'GET') return respond({ error: 'Método não permitido.' }, 405);
@@ -192,9 +196,17 @@ async function digest(value) { return new Uint8Array(await crypto.subtle.digest(
 function equal(a, b) { if (a.length !== b.length) return false; let mismatch = 0; for (let i = 0; i < a.length; i++) mismatch |= a[i] ^ b[i]; return mismatch === 0; }
 function base64(bytes) { return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
 function unbase64(value) { const raw = atob(value.replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(raw, c => c.charCodeAt(0)); }
-async function signingKey(env) { return crypto.subtle.importKey('raw', await digest(`${env.SUPERVISOR_USER}\0${env.SUPERVISOR_PASSWORD}`), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']); }
-async function makeToken(env, expiresAt) { const payload = base64(new TextEncoder().encode(JSON.stringify({ expiresAt, nonce: crypto.randomUUID() }))); const signature = await crypto.subtle.sign('HMAC', await signingKey(env), new TextEncoder().encode(payload)); return `${payload}.${base64(new Uint8Array(signature))}`; }
-async function verifyToken(env, token) {
-  if (!env.SUPERVISOR_USER || !env.SUPERVISOR_PASSWORD || !token || token.length > 1000) return null;
-  try { const [payload, signature, extra] = token.split('.'); if (!payload || !signature || extra) return null; const valid = await crypto.subtle.verify('HMAC', await signingKey(env), unbase64(signature), new TextEncoder().encode(payload)); if (!valid) return null; const session = JSON.parse(new TextDecoder().decode(unbase64(payload))); return Number.isFinite(session.expiresAt) && session.expiresAt > Date.now() ? session : null; } catch { return null; }
+function supervisorCredentials(env) {
+  return [
+    { user: env.SUPERVISOR_USER, password: env.SUPERVISOR_PASSWORD },
+    { user: env.SUPERVISOR_USER_2, password: env.SUPERVISOR_PASSWORD_2 }
+  ].filter(item => item.user && item.password);
 }
+async function signingKey(credential) { return crypto.subtle.importKey('raw', await digest(`${credential.user}\0${credential.password}`), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']); }
+async function makeToken(credential, expiresAt) { const payload = base64(new TextEncoder().encode(JSON.stringify({ expiresAt, nonce: crypto.randomUUID() }))); const signature = await crypto.subtle.sign('HMAC', await signingKey(credential), new TextEncoder().encode(payload)); return `${payload}.${base64(new Uint8Array(signature))}`; }
+async function verifyToken(env, token) {
+  const credentials = supervisorCredentials(env);
+  if (!credentials.length || !token || token.length > 1000) return null;
+  try { const [payload, signature, extra] = token.split('.'); if (!payload || !signature || extra) return null; const data = new TextEncoder().encode(payload), signed = unbase64(signature); let valid = false; for (const credential of credentials) valid = (await crypto.subtle.verify('HMAC', await signingKey(credential), signed, data)) || valid; if (!valid) return null; const session = JSON.parse(new TextDecoder().decode(unbase64(payload))); return Number.isFinite(session.expiresAt) && session.expiresAt > Date.now() ? session : null; } catch { return null; }
+}
+
