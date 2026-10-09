@@ -1,6 +1,7 @@
 import { loadDashboard, watchDashboard, startCrisis } from './client.js?v=20261008-lock-v1';
 import { initAdminAuth } from './admin-auth.js?v=20261008-lock-v1';
 import { COMMITTEES } from './committees.js?v=20261008-lock-v1';
+import { mergePresence } from './presence-state.js?v=20261008-lock-v1';
 const $ = id => document.getElementById(id);
 const votes = { '': ['Sem voto', ''], favoravel: ['Favorável', 'yes'], abstido: ['Abstido', 'neutral'], contra: ['Contra', 'no'] };
 let stop, poll, models = new Map(), auth;
@@ -44,10 +45,13 @@ function renderLastUpdate() {
 function crisisState(notice) { $('start-crisis').disabled = Boolean(notice); $('start-crisis').textContent = notice ? 'Crise em andamento' : 'Iniciar crise'; $('crisis-status').textContent = notice ? `Aviso enviado: ${notice.title} · ${new Date(notice.startedAt).toLocaleString('pt-BR')}` : ''; }
 function consume(update) {
   if (update.type === 'crisis-state') { crisisState(update.notice); return; }
-  if (update.type === 'dashboard-snapshot') { models = new Map(update.committees.map(form => [form.committee, form])); $('committee-grid').replaceChildren(); for (const form of update.committees) renderCommittee(form); crisisState(update.system?.crisis); }
+  if (update.type === 'dashboard-snapshot') {
+    models = new Map(update.committees.map(form => { const previous = models.get(form.committee); const base = previous && previous.revision > form.revision ? previous : form; return [form.committee, { ...base, ...mergePresence(previous, form) }]; }));
+    $('committee-grid').replaceChildren(); for (const form of models.values()) renderCommittee(form); crisisState(update.system?.crisis);
+  }
   else { const previous = models.get(update.committee); if (!previous) return;
-    if (update.type === 'presence') { previous.activeEditors = update.activeEditors; renderCommittee(previous); }
-    if (update.type === 'form-update' && update.revision >= previous.revision) { const form = { ...previous, ...update }; models.set(update.committee, form); renderCommittee(form); }
+    if (update.type === 'presence') { Object.assign(previous, mergePresence(previous, update)); renderCommittee(previous); }
+    if (update.type === 'form-update' && update.revision >= previous.revision) { const form = { ...previous, ...update, ...mergePresence(previous, update) }; models.set(update.committee, form); renderCommittee(form); }
   }
   renderOverview(); renderLastUpdate();
 }

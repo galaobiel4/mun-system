@@ -19,7 +19,7 @@ jobs:
       - name: Prepare static frontend
         run: |
           mkdir _site
-          cp index.html script.js voting.js storage.js loading.js style.css live.css live-integration.js config.js client.js committees.js supervisor.html supervisor.js supervisor.css dev.html dev.js admin-auth.js _site/
+          cp index.html script.js voting.js storage.js loading.js style.css live.css live-integration.js config.js client.js committees.js supervisor.html supervisor.js supervisor.css dev.html dev.js admin-auth.js presence-state.js _site/
           cp -r assets _site/
           node --input-type=module <<'NODE'
           import { readdirSync, readFileSync, writeFileSync } from 'node:fs';

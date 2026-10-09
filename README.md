@@ -64,3 +64,5 @@ No DEV, **Bloquear preenchimento** aceita data de liberação automática em hor
 A presença dos diretores é renovada a cada 30 segundos. Conexões que deixam de responder expiram em 90 segundos. Fechar ou sair da página encerra a presença; o DEV também oferece **Atualizar conexões**. O reset dos dados não inventa nem conserva sessões sem confirmação de conexão.
 
 Os arquivos do frontend são versionados pelo commit durante a publicação do Pages, incluindo as importações dos módulos. Isso evita misturar HTML e JavaScript de publicações diferentes. Mensagens de login não exibem erros internos de JavaScript ao usuário.
+
+A contagem de presença inclui uma versão de medição e rejeita mensagens antigas que tentem sobrescrever um estado mais recente. O alarme respeita o vencimento da conexão mais antiga; conexões saudáveis não adiam a limpeza de outras. Alarmes também corrigem a contagem para zero quando todas as conexões foram encerradas.
