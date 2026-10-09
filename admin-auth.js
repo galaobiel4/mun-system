@@ -1,19 +1,21 @@
-import { login, authStatus, setupAccount, currentUser, endSession } from './client.js';
+import { login, authStatus, setupAccount, currentUser, endSession } from './client.js?v=20261008-lock-v1';
 const $ = id => document.getElementById(id), KEY = 'minionu-supervisor-session';
 export async function initAdminAuth({ requireDev = false, onEnter, onLogout = () => {} }) {
   let session, user, timer, generation = 0;
+  const cleanup = () => { try { onLogout(); } catch (error) { console.error('Falha ao limpar o painel:', error); } };
+  const friendly = error => /Cannot read properties|is not a function|JSON/.test(error.message) ? 'Atualize a página e tente entrar novamente.' : error.message;
   const auth = {
     get token() { return session?.token; },
     get user() { return user; },
     logout(message = '') {
       generation++; clearTimeout(timer); session = undefined; user = undefined;
       try { sessionStorage.removeItem(KEY); } catch {}
-      onLogout(); $('panel').hidden = true; $('login-area').hidden = false;
+      cleanup(); $('panel').hidden = true; $('login-area').hidden = false;
       $('password').value = ''; $('login-error').textContent = message;
     }
   };
   async function enter(candidate) {
-    const current = ++generation; onLogout(); clearTimeout(timer);
+    const current = ++generation; cleanup(); clearTimeout(timer);
     if (!candidate?.token || !Number.isFinite(candidate.expiresAt) || candidate.expiresAt <= Date.now()) { auth.logout('Sessão expirada. Entre novamente.'); return; }
     try {
       const identity = await currentUser(candidate.token);
@@ -25,12 +27,12 @@ export async function initAdminAuth({ requireDev = false, onEnter, onLogout = ()
       try { sessionStorage.setItem(KEY, JSON.stringify(candidate)); } catch {}
       $('login-area').hidden = true; $('panel').hidden = false; $('password').value = '';
       timer = setTimeout(() => auth.logout('Sessão expirada. Entre novamente.'), candidate.expiresAt - Date.now());
-    } catch (error) { if (current === generation) auth.logout(error.message); }
+    } catch (error) { console.error('Falha ao abrir o painel:', error); if (current === generation) auth.logout(friendly(error)); }
   }
   $('login-form').addEventListener('submit', async event => {
     event.preventDefault(); $('login-button').disabled = true; $('login-error').textContent = '';
     try { await enter(await login($('username').value.trim(), $('password').value)); }
-    catch (error) { $('login-error').textContent = error.message; }
+    catch (error) { $('login-error').textContent = friendly(error); }
     finally { $('login-button').disabled = false; }
   });
   $('logout').addEventListener('click', () => { const token = auth.token; auth.logout(); if (token) endSession(token).catch(() => {}); });
@@ -52,3 +54,4 @@ export async function initAdminAuth({ requireDev = false, onEnter, onLogout = ()
   try { const saved = JSON.parse(sessionStorage.getItem(KEY) || 'null'); if (saved) await enter(saved); } catch { auth.logout(); }
   return auth;
 }
+

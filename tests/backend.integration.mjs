@@ -6,7 +6,7 @@ import { emptyForm, COMMITTEES } from '../committees.js';
 test('D1 e Durable Objects: permissões DEV, usuários, crise persistida, reset e cópias antigas', async () => {
   const mf = new Miniflare(convertV4MiniflareOptions({ modules: true, scriptPath: 'backend/.test-build/index.js', compatibilityDate: '2026-10-07',
     d1Databases: { DB: 'isolated-test' }, durableObjects: { ROOMS: { className: 'RoomLiveUpdates', useSQLite: true }, DASHBOARD: { className: 'GlobalDashboard', useSQLite: true } },
-    bindings: { ALLOWED_ORIGINS: 'http://localhost:5500', DEV_USER: 'devlocal', DEV_PASSWORD: 'SenhaLocalParaTestes123', SUPERVISOR_USER: 'supervisorlocal', SUPERVISOR_PASSWORD: 'OutraSenhaLocalTestes123' }
+    bindings: { INITIAL_EDITING_UNLOCK_AT: '2000-01-01T00:00:00.000Z', ALLOWED_ORIGINS: 'http://localhost:5500', DEV_USER: 'devlocal', DEV_PASSWORD: 'SenhaLocalParaTestes123', SUPERVISOR_USER: 'supervisorlocal', SUPERVISOR_PASSWORD: 'OutraSenhaLocalTestes123' }
   }));
   try {
     const db = await mf.getD1Database('DB');
@@ -27,7 +27,7 @@ test('D1 e Durable Objects: permissões DEV, usuários, crise persistida, reset 
     for (const c of COMMITTEES) {
       const response = await mf.dispatchFetch(`http://local.test/api/committees/${c.code}/live`, { headers: { Origin: 'http://localhost:5500', Upgrade: 'websocket' } });
       assert.equal(response.status, 101); const socket = response.webSocket; socket.accept();
-      const received = []; socket.addEventListener('message', event => received.push(JSON.parse(event.data))); sockets.push(socket); messages.push(received);
+      const received = []; socket.addEventListener('message', event => { if (event.data !== 'pong') received.push(JSON.parse(event.data)); }); sockets.push(socket); messages.push(received); socket.send('ping');
     }
     const delivered = async (predicate) => { const deadline = Date.now() + 3000; while (!messages.every(predicate)) { if (Date.now() > deadline) assert.fail('Aviso não chegou a todos os sockets.'); await new Promise(resolve => setTimeout(resolve, 10)); } };
     for (const path of ['/dev/status', '/dev/backup', '/users']) { assert.equal((await api(path)).status, 401); assert.equal((await api(path, 'GET', undefined, other)).status, 403); }
@@ -82,6 +82,26 @@ test('D1 e Durable Objects: permissões DEV, usuários, crise persistida, reset 
     assert.equal((await api('/committees/CSNU')).data.state.delegations.find(d => d.country === 'Reino Unido').vote, 'contra');
     const malformed = emptyForm('CDH'); malformed.state.delegations.pop();
     assert.equal((await api('/committees/CDH', 'PUT', malformed)).status, 400);
+    assert.equal((await api('/dev/editing', 'POST', { locked: true, until: null }, other)).status, 403);
+    assert.equal((await api('/dev/editing', 'POST', { locked: true, until: 'invalid' }, token)).status, 400);
+    const locked = await api('/dev/editing', 'POST', { locked: true, until: null }, token);
+    assert.equal(locked.status, 200); assert.equal(locked.data.editing.locked, true);
+    await delivered(received => received.some(event => event.type === 'editing-state' && event.editing.changedAt === locked.data.editing.changedAt));
+    const readable = await api('/committees/CDH'); assert.equal(readable.status, 200); assert.equal(readable.data.editing.locked, true);
+    assert.equal((await api('/committees/CDH', 'PUT', readable.data)).status, 423);
+    assert.equal((await api('/public/status')).data.editing.locked, true);
+    assert.equal((await api('/dev/reset', 'POST', { confirmation: 'RESETAR TODOS' }, token)).status, 200);
+    assert.equal((await api('/public/status')).data.editing.locked, true);
+    assert.equal((await api('/dev/editing', 'POST', { locked: false }, token)).data.editing.locked, false);
+    assert.equal((await api('/committees/CDH', 'PUT', (await api('/committees/CDH')).data)).status, 200);
+    const deadline = new Date(Date.now() + 800).toISOString();
+    assert.equal((await api('/dev/editing', 'POST', { locked: true, until: deadline }, token)).status, 200);
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    assert.equal((await api('/public/status')).data.editing.locked, false);
+    assert.equal((await api('/committees/CDH', 'PUT', (await api('/committees/CDH')).data)).status, 200);
     for (const socket of sockets) socket.close();
+    let online = 1, attempts = 0;
+    while (online && attempts++ < 30) { await new Promise(resolve => setTimeout(resolve, 20)); online = (await api('/dashboard', 'GET', undefined, token)).data.committees.find(c => c.committee === 'CDH').activeEditors; }
+    assert.equal(online, 0);
   } finally { await mf.dispose(); }
 });

@@ -14,7 +14,13 @@ export function ensureControlSchema(env) {
 export async function systemState(env) {
   await ensureControlSchema(env);
   const row = await env.DB.prepare("SELECT value FROM app_settings WHERE key = 'system'").first();
-  return row ? JSON.parse(row.value) : { resetEpoch: '', crisis: null };
+  const system = row ? JSON.parse(row.value) : { resetEpoch: '', crisis: null };
+  system.editingLock ??= { enabled: true, until: env.INITIAL_EDITING_UNLOCK_AT || '2026-10-09T11:00:00.000Z', changedAt: '' };
+  return system;
+}
+export function editingStatus(system, now = Date.now()) {
+  const lock = system.editingLock;
+  return { locked: Boolean(lock?.enabled && (!lock.until || Date.parse(lock.until) > now)), until: lock?.until || null, changedAt: lock?.changedAt || '', serverTime: now };
 }
 export const systemStatement = (env, system) => env.DB.prepare("INSERT INTO app_settings (key, value) VALUES ('system', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(JSON.stringify(system));
 export const auditStatement = (env, actor, action, details) => env.DB.prepare('INSERT INTO admin_events (id, actor, action, details_json, created_at) VALUES (?, ?, ?, ?, ?)').bind(crypto.randomUUID(), actor, action, JSON.stringify(details), new Date().toISOString());

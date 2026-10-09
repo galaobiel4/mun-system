@@ -54,3 +54,13 @@ O primeiro comando verifica votação, normalização, histórico cumulativo e a
 `codepen-original/` preserva a exportação original. Textos do usuário são exibidos como texto, sem interpretar HTML. Os formulários de comitê permanecem sem login, conforme o fluxo de uso; quando dois dispositivos editam o mesmo comitê, prevalece o último estado recebido, preservando-se o histórico de votação.
 
 
+
+## Bloqueio de preenchimento e presença
+
+O site permanece acessível durante o bloqueio. Os painéis dos diretores permitem consultar e selecionar comitês, mas seus campos e botões de votação ficam desabilitados. O servidor também recusa gravações com HTTP 423. A liberação inicial está programada para 09/10/2026 às 08:00 em São Paulo (`2026-10-09T11:00:00.000Z`), usando o relógio do servidor e a variável `INITIAL_EDITING_UNLOCK_AT` quando ainda não houver uma configuração manual.
+
+No DEV, **Bloquear preenchimento** aceita data de liberação automática em horário de Brasília ou data vazia para bloqueio manual; **Desbloquear preenchimento** libera todos os comitês. O reset preserva o bloqueio. A configuração fica no D1 e as mudanças chegam aos painéis por WebSocket e consultas periódicas.
+
+A presença dos diretores é renovada a cada 30 segundos. Conexões que deixam de responder expiram em 90 segundos. Fechar ou sair da página encerra a presença; o DEV também oferece **Atualizar conexões**. O reset dos dados não inventa nem conserva sessões sem confirmação de conexão.
+
+Os arquivos do frontend são versionados pelo commit durante a publicação do Pages, incluindo as importações dos módulos. Isso evita misturar HTML e JavaScript de publicações diferentes. Mensagens de login não exibem erros internos de JavaScript ao usuário.

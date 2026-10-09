@@ -21,6 +21,17 @@ jobs:
           mkdir _site
           cp index.html script.js voting.js storage.js loading.js style.css live.css live-integration.js config.js client.js committees.js supervisor.html supervisor.js supervisor.css dev.html dev.js admin-auth.js _site/
           cp -r assets _site/
+          node --input-type=module <<'NODE'
+          import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
+          const version = process.env.GITHUB_SHA;
+          for (const name of readdirSync('_site')) {
+            if (!/\.(js|html)$/.test(name)) continue;
+            let source = readFileSync('_site/' + name, 'utf8');
+            if (name.endsWith('.js')) source = source.replace(/from '(\.\/[^'?]+\.js)(?:\?[^']*)?'/g, (_, file) => `from '${file}?v=${version}'`);
+            else source = source.replace(/(src|href)="([^"?]+\.(?:js|css))(?:\?[^" ]*)?"/g, (_, attribute, file) => `${attribute}="${file}?v=${version}"`);
+            writeFileSync('_site/' + name, source);
+          }
+          NODE
           touch _site/.nojekyll
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

@@ -1,4 +1,4 @@
-import { COUNTRIES, committeeByCode } from './committees.js';
+import { COUNTRIES, committeeByCode } from './committees.js?v=20261008-lock-v1';
 
 export const MAX_VOTATIONS = 1000;
 export const VOTE_LABELS = { '': 'Não marcado', favoravel: 'Favorável', abstido: 'Abstido', contra: 'Contra' };
@@ -72,3 +72,4 @@ function calculateForCountries(code, votes, options, countries) {
     : tally.favoravel >= required ? 'approved' : 'rejected';
   return { result, method: 'countries', majority, required, basis, tally, vetoes };
 }
+

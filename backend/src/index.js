@@ -1,7 +1,8 @@
 import { COMMITTEES, COUNTRIES, committeeByCode, emptyForm } from '../../committees.js';
 import { handleAccounts, verifySession } from './users.js';
 import { normalizeVoting, MAX_VOTATIONS } from '../../voting.js';
-import { ensureControlSchema, systemState, systemStatement, auditStatement, auditEvents } from './control.js';
+import { ensureControlSchema, systemState, systemStatement, auditStatement, auditEvents, editingStatus } from './control.js';
+import { activeEditors, PRESENCE_TTL } from './presence.js';
 const MAX_BODY = 4000000;
 const VOTES = new Set(['', 'favoravel', 'abstido', 'contra']);
 const VOTE_LABELS = { '': 'Sem voto', favoravel: 'Favorável', abstido: 'Abstido', contra: 'Contra' };
@@ -15,21 +16,26 @@ export default {
     const cors = allowed ? { 'access-control-allow-origin': origin, 'access-control-allow-methods': 'GET, PUT, POST, OPTIONS', 'access-control-allow-headers': 'Content-Type, Authorization', vary: 'Origin' } : {};
     const respond = (data, status = 200) => json(data, status, cors);
     const url = new URL(request.url);
-    if (url.pathname === '/api/health') return respond({ ok: true, version: '2026-10-veto-imediato' });
+    if (url.pathname === '/api/health') return respond({ ok: true, version: '2026-10-lock-presence' });
     if (request.method === 'OPTIONS') return new Response(null, { status: allowed ? 204 : 403, headers: cors });
     if (!allowed) return respond({ error: 'Origem não autorizada.' }, 403);
     try {
+      if (url.pathname === '/api/public/status' && request.method === 'GET') return respond({ editing: editingStatus(await systemState(env)), version: '2026-10-lock-presence' });
       if (url.pathname.startsWith('/api/auth/') || url.pathname === '/api/users' || url.pathname.startsWith('/api/users/')) return await handleAccounts(request, env, respond);
       if (url.pathname.startsWith('/api/dev/') || url.pathname === '/api/crisis/start') {
         const session = await verifySession(env, request.headers.get('Authorization')?.replace(/^Bearer\s+/i, ''));
         if (!session) return respond({ error: 'Entre no painel para continuar.' }, 401);
         const isStart = url.pathname === '/api/crisis/start';
         if (!isStart && session.user.role !== 'dev') return respond({ error: 'Esta ação exige acesso DEV.' }, 403);
-        const routes = { '/api/dev/status': 'status', '/api/dev/backup': 'backup', '/api/dev/reset': 'reset', '/api/dev/crisis/end': 'end-crisis', '/api/crisis/start': 'start-crisis' };
+        const routes = { '/api/dev/status': 'status', '/api/dev/backup': 'backup', '/api/dev/reset': 'reset', '/api/dev/crisis/end': 'end-crisis', '/api/dev/editing': 'editing', '/api/dev/presence': 'presence', '/api/crisis/start': 'start-crisis' };
         const action = routes[url.pathname];
         if (!action) return respond({ error: 'Rota não encontrada.' }, 404);
         if (request.method !== (['status', 'backup'].includes(action) ? 'GET' : 'POST')) return respond({ error: 'Método não permitido.' }, 405);
         const body = request.method === 'POST' ? await readJson(request) : {};
+        if (action === 'editing') {
+          if (typeof body.locked !== 'boolean' || (body.until !== null && body.until !== undefined && (typeof body.until !== 'string' || !Number.isFinite(Date.parse(body.until)) || Date.parse(body.until) <= Date.now()))) return respond({ error: 'Informe o estado e uma data futura para a liberação.' }, 400);
+          body.until = body.locked && body.until ? new Date(body.until).toISOString() : null;
+        }
         if (action === 'reset' && body?.confirmation !== 'RESETAR TODOS') return respond({ error: 'Digite RESETAR TODOS para confirmar.' }, 400);
         if (action === 'start-crisis') { body.title = text(body.title, 500).trim() || 'A crise começou'; body.message = text(body.message, 2000).trim() || 'A crise foi iniciada. Acompanhe as orientações e registre os acontecimentos do seu comitê.'; }
         const stub = env.DASHBOARD.get(env.DASHBOARD.idFromName('all-committees'));
@@ -69,10 +75,21 @@ export default {
 export class RoomLiveUpdates {
   constructor(state, env) { this.state = state; this.env = env; this.queue = Promise.resolve(); }
   fetch(request) {
-    if (new URL(request.url).pathname === '/presence') return json({ activeEditors: this.active() });
+    if (new URL(request.url).pathname === '/presence') return this.refreshPresence(request.headers.get('x-committee-code')).then(count => json({ activeEditors: count }));
     const work = this.queue.then(() => this.handle(request)); this.queue = work.catch(() => {}); return work;
   }
-  active(exclude) { return this.state.getWebSockets().filter(socket => socket !== exclude && socket.readyState === 1).length; }
+  active(exclude) { return activeEditors(this.state.getWebSockets(), Date.now(), exclude).length; }
+  async refreshPresence(code) {
+    const sockets = this.state.getWebSockets(), live = activeEditors(sockets), fresh = new Set(live);
+    let removed = false;
+    for (const socket of sockets) if (!fresh.has(socket)) { try { socket.close(1000, 'Conexão inativa.'); removed = true; } catch {} }
+    const count = live.length;
+    if (removed && code) this.publish({ type: 'presence', committee: code, activeEditors: count });
+    if (live.length) await this.state.storage.setAlarm(Math.min(...live.map(socket => socket.deserializeAttachment().lastSeen)) + PRESENCE_TTL);
+    else await this.state.storage.deleteAlarm();
+    return count;
+  }
+  async alarm() { await this.refreshPresence(await this.state.storage.get('committee-code')); }
   async handle(request) {
     const code = request.headers.get('x-committee-code');
     if (!committeeByCode(code)) return json({ error: 'Comitê inválido.' }, 400);
@@ -84,20 +101,24 @@ export class RoomLiveUpdates {
       row = await this.env.DB.prepare('SELECT * FROM committee_forms WHERE code = ?').bind(code).first();
     }
     const path = new URL(request.url).pathname;
-    const snapshot = () => ({ ...formSnapshot(row), notice: system.crisis });
+    const snapshot = () => ({ ...formSnapshot(row), notice: system.crisis, editing: editingStatus(system), activeEditors: this.active() });
     if (path === '/snapshot') return json(snapshot());
-    if (path === '/invalidate' || path === '/notice') {
-      const message = path === '/invalidate' ? { type: 'form-reset', ...snapshot() } : { type: 'crisis-state', notice: system.crisis };
+    if (path === '/invalidate' || path === '/notice' || path === '/editing') {
+      const message = path === '/invalidate' ? { type: 'form-reset', ...snapshot() } : path === '/editing' ? { type: 'editing-state', editing: editingStatus(system) } : { type: 'crisis-state', notice: system.crisis };
       for (const socket of this.state.getWebSockets()) { try { socket.send(JSON.stringify(message)); } catch {} }
       return json({ ok: true });
     }
     if (path === '/connect') {
-      const pair = new WebSocketPair(); this.state.acceptWebSocket(pair[1]); pair[1].serializeAttachment({ code });
+      await this.refreshPresence(code);
+      const pair = new WebSocketPair(); this.state.acceptWebSocket(pair[1]); pair[1].serializeAttachment({ code, lastSeen: Date.now() });
+      await this.state.storage.put('committee-code', code);
+      await this.state.storage.setAlarm(Date.now() + PRESENCE_TTL);
       pair[1].send(JSON.stringify({ type: 'form-snapshot', ...snapshot() }));
       await this.publish({ type: 'presence', committee: code, activeEditors: this.active() });
       return new Response(null, { status: 101, webSocket: pair[0] });
     }
     if (path === '/save' && request.method === 'POST') {
+      if (editingStatus(system).locked) return json({ error: 'O preenchimento dos comitês está bloqueado.', editing: editingStatus(system) }, 423);
       const form = await request.json(), previous = JSON.parse(row.form_json);
       if (form.legacyCSNU) {
         // Um navegador com a versão antiga não pode limpar os dados da nova delegação.
@@ -118,11 +139,14 @@ export class RoomLiveUpdates {
       if (!changes.length) return json(snapshot());
       const now = new Date().toISOString(), revision = row.revision + 1;
       const results = await this.env.DB.batch([
-        this.env.DB.prepare("UPDATE committee_forms SET form_json = ?, revision = ?, updated_at = ? WHERE code = ? AND revision = ? AND COALESCE((SELECT json_extract(value, '$.resetEpoch') FROM app_settings WHERE key = 'system'), '') = ?").bind(JSON.stringify(form), revision, now, code, row.revision, form.resetEpoch),
+        this.env.DB.prepare("UPDATE committee_forms SET form_json = ?, revision = ?, updated_at = ? WHERE code = ? AND revision = ? AND COALESCE((SELECT json_extract(value, '$.resetEpoch') FROM app_settings WHERE key = 'system'), '') = ? AND COALESCE((SELECT json_extract(value, '$.editingLock.changedAt') FROM app_settings WHERE key = 'system'), '') = ?").bind(JSON.stringify(form), revision, now, code, row.revision, form.resetEpoch, system.editingLock.changedAt),
         this.env.DB.prepare('INSERT INTO committee_events (committee_code, revision, changes_json, created_at) SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM committee_forms WHERE code = ? AND revision = ? AND updated_at = ?)').bind(code, revision, JSON.stringify(changes), now, code, revision, now)
       ]);
-      if (!results[0].meta.changes) return json({ error: 'O comitê foi resetado. Recarregue os dados atuais.', reset: true }, 409);
-      const saved = { ...form, revision, updatedAt: now, createdAt: row.created_at, activeEditors: this.active(), notice: system.crisis };
+      if (!results[0].meta.changes) {
+        const editing = editingStatus(await systemState(this.env));
+        return editing.locked ? json({ error: 'O preenchimento dos comitês está bloqueado.', editing }, 423) : json({ error: 'Os dados do comitê foram atualizados. Recarregue os dados atuais.', reset: true }, 409);
+      }
+      const saved = { ...form, revision, updatedAt: now, createdAt: row.created_at, activeEditors: this.active(), notice: system.crisis, editing: editingStatus(system) };
       const message = { type: 'form-update', ...saved, changes };
       for (const socket of this.state.getWebSockets()) { try { socket.send(JSON.stringify(message)); } catch {} }
       await this.publish(message);
@@ -134,7 +158,16 @@ export class RoomLiveUpdates {
     const work = this.env.DASHBOARD.get(this.env.DASHBOARD.idFromName('all-committees')).fetch('https://dashboard.internal/update', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(event) }).catch(error => console.error('Falha ao atualizar acompanhamento:', error.message));
     this.state.waitUntil?.(work);
   }
-  webSocketMessage(socket) { socket.close(1008, 'Esta conexão recebe atualizações apenas.'); }
+  async webSocketMessage(socket, message) {
+    const attachment = socket.deserializeAttachment();
+    if (message === 'ping' && attachment?.code) {
+      socket.serializeAttachment({ ...attachment, lastSeen: Date.now() });
+      await this.state.storage.setAlarm(Date.now() + PRESENCE_TTL);
+      socket.send('pong'); return;
+    }
+    if (message === 'leave') { socket.close(1000, 'Painel fechado.'); if (attachment) this.publish({ type: 'presence', committee: attachment.code, activeEditors: this.active(socket) }); return; }
+    socket.close(1008, 'Mensagem inválida.');
+  }
   async webSocketClose(socket, code, reason) {
     const attachment = socket.deserializeAttachment(); socket.close([1005, 1006, 1015].includes(code) ? 1000 : code, reason);
     if (attachment) await this.publish({ type: 'presence', committee: attachment.code, activeEditors: this.active(socket) });
@@ -152,12 +185,13 @@ export class GlobalDashboard {
     const system = await systemState(this.env);
     const rows = await this.env.DB.prepare('SELECT * FROM committee_forms').all();
     const presence = await Promise.all(COMMITTEES.map(async committee => {
-      const response = await this.env.ROOMS.get(this.env.ROOMS.idFromName(`committee:${committee.code}`)).fetch('https://committee.internal/presence'); return response.json();
+      const response = await this.env.ROOMS.get(this.env.ROOMS.idFromName(`committee:${committee.code}`)).fetch('https://committee.internal/presence', { headers: { 'x-committee-code': committee.code } }); return response.json();
     }));
     const history = await this.env.DB.prepare('SELECT committee_code, revision, changes_json, created_at FROM committee_events ORDER BY created_at DESC LIMIT 50').all();
     return {
       type: 'dashboard-snapshot',
       system,
+      editing: editingStatus(system),
       committees: COMMITTEES.map((committee, index) => {
         const row = rows.results.find(r => r.code === committee.code);
         return { ...(row ? formSnapshot(row) : { ...emptyForm(committee.code), resetEpoch: system.resetEpoch, revision: 0, updatedAt: null }), name: committee.name, activeEditors: presence[index].activeEditors };
@@ -207,7 +241,15 @@ export class GlobalDashboard {
   async control(action, body) {
     await ensureControlSchema(this.env);
     const system = await systemState(this.env);
-    if (action === 'status') return json({ system, audit: await auditEvents(this.env), committeeCount: COMMITTEES.length, version: '2026-10-veto-imediato' });
+    if (action === 'status') return json({ system, editing: editingStatus(system), audit: await auditEvents(this.env), committeeCount: COMMITTEES.length, version: '2026-10-lock-presence' });
+    if (action === 'editing') {
+      system.editingLock = { enabled: body.locked, until: body.until || null, changedAt: crypto.randomUUID() };
+      await this.env.DB.batch([systemStatement(this.env, system), auditStatement(this.env, body.actor, 'editing', { locked: body.locked, until: body.until || null })]);
+      await this.notifyRooms('/editing');
+      const editing = editingStatus(system); this.broadcast({ type: 'editing-state', editing });
+      return json({ ok: true, editing, system });
+    }
+    if (action === 'presence') { const snapshot = await this.snapshot(); this.broadcast(snapshot); return json({ ok: true, committees: snapshot.committees.map(c => ({ committee: c.committee, activeEditors: c.activeEditors })) }); }
     if (action === 'backup') {
       const events = await this.env.DB.prepare('SELECT * FROM committee_events ORDER BY created_at, committee_code, revision').all();
       return json({ version: 1, exportedAt: new Date().toISOString(), dashboard: await this.snapshot(), events: events.results, audit: await auditEvents(this.env) });
@@ -222,7 +264,7 @@ export class GlobalDashboard {
     }
     if (action === 'reset') {
       if (body.confirmation !== 'RESETAR TODOS') return json({ error: 'Confirmação inválida.' }, 400);
-      const epoch = crypto.randomUUID(), now = new Date().toISOString(), fresh = { resetEpoch: epoch, crisis: null };
+      const epoch = crypto.randomUUID(), now = new Date().toISOString(), fresh = { resetEpoch: epoch, crisis: null, editingLock: system.editingLock };
       const statements = COMMITTEES.map(c => this.env.DB.prepare('INSERT INTO committee_forms (code, form_json, revision, created_at, updated_at) VALUES (?, ?, 1, ?, ?) ON CONFLICT(code) DO UPDATE SET form_json = excluded.form_json, revision = committee_forms.revision + 1, updated_at = excluded.updated_at').bind(c.code, JSON.stringify({ ...emptyForm(c.code), resetEpoch: epoch }), now, now));
       await this.env.DB.batch([systemStatement(this.env, fresh), ...statements, this.env.DB.prepare('DELETE FROM committee_events'), auditStatement(this.env, body.actor, action, { committees: COMMITTEES.map(c => c.code), resetEpoch: epoch })]);
       await this.notifyRooms('/invalidate');

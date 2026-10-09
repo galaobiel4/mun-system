@@ -1,5 +1,5 @@
-import { COUNTRIES, committeeByCode } from './committees.js';
-import { calculateVote, MAX_VOTATIONS, VOTE_LABELS } from './voting.js';
+import { COUNTRIES, committeeByCode } from './committees.js?v=20261008-lock-v1';
+import { calculateVote, MAX_VOTATIONS, VOTE_LABELS } from './voting.js?v=20261008-lock-v1';
 
 const pais = document.getElementById('pais');
 const votacao = document.getElementById('votacao');
@@ -46,7 +46,7 @@ function refresh() {
     }
   }
   summary.textContent = message;
-  document.getElementById('register-vote').disabled = result.result === 'pending' || !readVoting().proposal.trim() || history.length >= MAX_VOTATIONS;
+  document.getElementById('register-vote').disabled = window.formEditingLocked === true || result.result === 'pending' || !readVoting().proposal.trim() || history.length >= MAX_VOTATIONS;
   const rule = document.getElementById('vote-rule');
   const committee = committeeByCode(activeCode);
   rule.textContent = activeCode === 'CSNU'
@@ -91,6 +91,7 @@ function publishVotingChange() {
   votacao.dispatchEvent(new CustomEvent('voting-change', { bubbles: true }));
 }
 function registerVote() {
+  if (window.formEditingLocked === true) return;
   const current = readVoting();
   const proposal = current.proposal.trim();
   const votes = readVotes();
@@ -183,5 +184,6 @@ document.addEventListener('change', event => {
 });
 window.selecao = selecao;
 window.votingUI = { read: readVoting, restore: restoreVoting, refresh, mergeHistory };
+
 
 

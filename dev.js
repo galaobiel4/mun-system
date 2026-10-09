@@ -1,5 +1,5 @@
-import { initAdminAuth } from './admin-auth.js';
-import { listUsers, createUser, updateUser, devStatus, exportBackup, resetAll, endCrisis, watchDashboard } from './client.js';
+import { initAdminAuth } from './admin-auth.js?v=20261008-lock-v1';
+import { listUsers, createUser, updateUser, devStatus, exportBackup, resetAll, endCrisis, watchDashboard, setEditingLock, refreshPresence } from './client.js?v=20261008-lock-v1';
 const $ = id => document.getElementById(id);
 const node = (tag, text, cls) => { const el = document.createElement(tag); if (text !== undefined) el.textContent = text; if (cls) el.className = cls; return el; };
 let auth, passwordUser, nextOffset, stop;
@@ -21,7 +21,11 @@ async function loadUsers(session, append = false) {
 async function loadStatus(session) {
   const token = session.token, data = await devStatus(token); if (session.token !== token) return;
   $('dev-committees').textContent = data.committeeCount; $('dev-health').textContent = 'Conectado'; $('dev-crisis').textContent = data.system.crisis ? 'Em andamento' : 'Sem aviso'; $('end-crisis').disabled = !data.system.crisis; $('dev-version').textContent = `Versão: ${data.version} · Consulta: ${new Date().toLocaleString('pt-BR')}`;
-  const labels = { 'start-crisis': 'Início da crise', 'end-crisis': 'Aviso de crise encerrado', reset: 'Reset dos comitês', 'create-user': 'Usuário criado', 'update-user': 'Usuário atualizado' };
+  const editing = data.editing;
+  $('editing-state').textContent = editing.locked ? editing.until ? `Bloqueado até ${new Date(editing.until).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })} (Brasília).` : 'Bloqueado até liberação manual.' : 'Preenchimento liberado.';
+  $('unlock-editing').disabled = !editing.locked;
+  if (document.activeElement !== $('editing-until')) $('editing-until').value = editing.locked && editing.until ? new Date(Date.parse(editing.until) - 3 * 60 * 60000).toISOString().slice(0, 16) : '';
+  const labels = { 'start-crisis': 'Início da crise', 'end-crisis': 'Aviso de crise encerrado', reset: 'Reset dos comitês', 'create-user': 'Usuário criado', 'update-user': 'Usuário atualizado', editing: 'Bloqueio do preenchimento' };
   $('admin-events').replaceChildren(...data.audit.map(event => { const card = node('article', undefined, 'event'); card.append(node('time', new Date(event.createdAt).toLocaleString('pt-BR')), node('h3', labels[event.action] || event.action), node('p', `Por ${event.actor}${event.details.username ? ' · ' + event.details.username : ''}`)); return card; }));
   if (!data.audit.length) $('admin-events').append(node('p', 'Nenhuma ação administrativa registrada ainda.', 'empty'));
 }
@@ -30,9 +34,16 @@ auth = await initAdminAuth({ requireDev: true,
   async onEnter(session, isCurrent) {
     await Promise.all([loadUsers(session), loadStatus(session)]); if (!isCurrent()) return;
     $('dev-identity').textContent = `Conectado como ${session.user.displayName} · ${session.user.username}`;
-    stop = watchDashboard(session.token, update => { if (isCurrent() && ['crisis-state', 'dashboard-snapshot'].includes(update.type)) loadStatus(session).catch(() => {}); }, state => { if (isCurrent() && state === 'expired') session.logout('Sessão expirada. Entre novamente.'); });
+    stop = watchDashboard(session.token, update => { if (isCurrent() && ['crisis-state', 'dashboard-snapshot', 'editing-state'].includes(update.type)) loadStatus(session).catch(() => {}); }, state => { if (isCurrent() && state === 'expired') session.logout('Sessão expirada. Entre novamente.'); });
   }
 });
+$('editing-lock-form').addEventListener('submit', async event => {
+  event.preventDefault(); $('lock-editing').disabled = true;
+  try { const value = $('editing-until').value, until = value ? new Date(value + '-03:00').toISOString() : null; await setEditingLock(auth.token, true, until); await loadStatus(auth); message('editing-feedback', 'Preenchimento bloqueado em todos os comitês.'); }
+  catch (error) { message('editing-feedback', error.message, true); } finally { $('lock-editing').disabled = false; }
+});
+$('unlock-editing').addEventListener('click', async () => { $('unlock-editing').disabled = true; try { await setEditingLock(auth.token, false); await loadStatus(auth); message('editing-feedback', 'Preenchimento liberado em todos os comitês.'); } catch (error) { message('editing-feedback', error.message, true); $('unlock-editing').disabled = false; } });
+$('refresh-presence').addEventListener('click', async () => { $('refresh-presence').disabled = true; try { await refreshPresence(auth.token); message('maintenance-message', 'Conexões atualizadas. Sessões sem resposta foram removidas da contagem.'); } catch (error) { message('maintenance-message', error.message, true); } finally { $('refresh-presence').disabled = false; } });
 $('users-more').addEventListener('click', async () => { $('users-more').disabled = true; try { await loadUsers(auth, true); } catch (error) { message('users-message', error.message, true); } finally { $('users-more').disabled = false; } });
 $('create-user-form').addEventListener('submit', async event => {
   event.preventDefault(); const button = event.submitter; button.disabled = true;
@@ -60,3 +71,4 @@ $('reset-all-form').addEventListener('submit', async event => {
   try { const result = await resetAll(auth.token); $('reset-dialog').close(); await loadStatus(auth); message('maintenance-message', `${result.resetCount} comitês e o acompanhamento foram resetados. Usuários preservados.`); }
   catch (error) { $('reset-all-error').textContent = error.message; } finally { button.disabled = false; }
 });
+

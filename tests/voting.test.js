@@ -124,6 +124,7 @@ test('salvar formulário antigo não apaga registros e dois registros simultâne
         return statements.map(() => ({ meta: { changes: 1 } }));
       }
     },
+    INITIAL_EDITING_UNLOCK_AT: '2000-01-01T00:00:00.000Z',
     DASHBOARD: { idFromName: value => value, get: () => ({ fetch: async () => Response.json({ ok: true }) }) }
   };
   const room = new RoomLiveUpdates({ getWebSockets: () => [] }, env);

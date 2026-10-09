@@ -1,5 +1,5 @@
-import { COUNTRIES, committeeByCode } from './committees.js';
-import { normalizeVoting } from './voting.js';
+import { COUNTRIES, committeeByCode } from './committees.js?v=20261008-lock-v1';
+import { normalizeVoting } from './voting.js?v=20261008-lock-v1';
 
 const prefix = 'minionu-form.v1.';
 const selectedKey = 'minionu-last-committee';
@@ -53,3 +53,4 @@ export function createFormStore(storage) {
     }
   };
 }
+

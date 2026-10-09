@@ -7,9 +7,9 @@
   <meta name="theme-color" content="#103778">
   <link rel="icon" href="assets/minionu-piedade.png" type="image/png">
   <link rel="preload" as="image" href="assets/minionu-piedade.png">
-  <link rel="stylesheet" href="style.css">
-  <link rel="stylesheet" href="live.css">
-  <script src="loading.js" defer></script>
+  <link rel="stylesheet" href="style.css?v=20261008-lock-v1">
+  <link rel="stylesheet" href="live.css?v=20261008-lock-v1">
+  <script src="loading.js?v=20261008-lock-v1" defer></script>
 </head>
 <body class="is-loading">
   <div id="loading-screen" class="loading-screen" role="status" aria-label="Carregando MiniONU Piedade">
@@ -34,6 +34,7 @@
       </div>
     </nav>
     <main class="page-shell">
+      <section id="editing-notice" class="editing-notice" role="status"><h2>Consulta disponível</h2><p id="editing-message">Consultando a disponibilidade de preenchimento…</p></section>
       <section id="crisis-notice" class="crisis-notice" role="alert" hidden>
         <div><p class="eyebrow">Comunicado aos diretores</p><h2 id="crisis-notice-title"></h2><p id="crisis-notice-message"></p><small id="crisis-notice-time"></small></div>
         <button type="button" id="crisis-notice-read">Entendi</button>
@@ -56,19 +57,19 @@
           </select>
           <fieldset class="veto-configuration">
             <legend>Direito de veto</legend>
-            <div class="choice-row"><label><input type="radio" name="config" id="veto"> Sim</label><label><input type="radio" name="config" id="sem-veto" checked> Não</label></div>
+            <div class="choice-row"><label><input disabled type="radio" name="config" id="veto"> Sim</label><label><input disabled type="radio" name="config" id="sem-veto" checked> Não</label></div>
             <details class="paises-veto" hidden><summary>Países com veto</summary>
               <div class="veto-countries">
-                <label><input type="checkbox" id="brasil"> Brasil</label>
-                <label><input type="checkbox" id="india"> Índia</label>
-                <label><input type="checkbox" id="eua"> EUA</label>
-                <label><input type="checkbox" id="turquia"> Turquia</label>
-                <label><input type="checkbox" id="russia"> Rússia</label>
-                <label><input type="checkbox" id="china"> China</label>
-                <label><input type="checkbox" id="nigeria"> Nigéria</label>
-                <label><input type="checkbox" id="alemanha"> Alemanha</label>
-                <label><input type="checkbox" id="franca"> França</label>
-                <label><input type="checkbox" id="uk"> Reino Unido</label>
+                <label><input disabled type="checkbox" id="brasil"> Brasil</label>
+                <label><input disabled type="checkbox" id="india"> Índia</label>
+                <label><input disabled type="checkbox" id="eua"> EUA</label>
+                <label><input disabled type="checkbox" id="turquia"> Turquia</label>
+                <label><input disabled type="checkbox" id="russia"> Rússia</label>
+                <label><input disabled type="checkbox" id="china"> China</label>
+                <label><input disabled type="checkbox" id="nigeria"> Nigéria</label>
+                <label><input disabled type="checkbox" id="alemanha"> Alemanha</label>
+                <label><input disabled type="checkbox" id="franca"> França</label>
+                <label><input disabled type="checkbox" id="uk"> Reino Unido</label>
               </div>
             </details>
           </fieldset>
@@ -78,9 +79,9 @@
           <section class="div2 panel" id="crise" aria-labelledby="crisis-title">
             <div class="section-heading"><span class="section-number">02</span><h2 id="crisis-title">Crise &amp; resolução</h2></div>
             <label class="field-label" for="crisis-name">Título da crise</label>
-            <input class="crise" id="crisis-name" type="text" maxlength="500" placeholder="Qual é a situação em discussão?">
+            <input disabled class="crise" id="crisis-name" type="text" maxlength="500" placeholder="Qual é a situação em discussão?">
             <label class="field-label" for="crisis-details">Detalhamento e resolução</label>
-            <textarea class="detalhamentocrise" id="crisis-details" maxlength="5000" rows="5" placeholder="Descreva o contexto, as medidas propostas e os encaminhamentos..."></textarea>
+            <textarea disabled class="detalhamentocrise" id="crisis-details" maxlength="5000" rows="5" placeholder="Descreva o contexto, as medidas propostas e os encaminhamentos..."></textarea>
           </section>
           <section class="panel delegations-panel" id="delegacoes" aria-labelledby="delegations-title">
             <div class="section-heading"><span class="section-number">03</span><h2 id="delegations-title">Delegações</h2></div>
@@ -93,8 +94,10 @@
       <footer class="page-footer"><span>MiniONU <b>Piedade</b></span><span>Diálogo, cooperação e novas perspectivas.</span></footer>
     </main>
   </div>
-  <script type="module" src="script.js"></script>
-  <script type="module" src="live-integration.js"></script>
+  <script type="module" src="script.js?v=20261008-lock-v1"></script>
+  <script type="module" src="live-integration.js?v=20261008-lock-v1"></script>
 </body>
 </html>
+
+
 

@@ -1,6 +1,6 @@
-import { loadForm, watchForm, createAutosave } from './client.js';
-import { committeeByCode, emptyForm } from './committees.js';
-import { createFormStore } from './storage.js';
+import { loadForm, watchForm, createAutosave, loadEditingStatus } from './client.js?v=20261008-lock-v1';
+import { committeeByCode, emptyForm } from './committees.js?v=20261008-lock-v1';
+import { createFormStore } from './storage.js?v=20261008-lock-v1';
 
 const $ = id => document.getElementById(id);
 const VETO = { brasil: 'Brasil', india: 'Índia', eua: 'EUA', turquia: 'Turquia', russia: 'Rússia', china: 'China', nigeria: 'Nigéria', alemanha: 'Alemanha', franca: 'França', uk: 'Reino Unido' };
@@ -8,6 +8,29 @@ let browserStorage;
 try { browserStorage = window.localStorage; } catch {}
 const store = createFormStore(browserStorage);
 let activeCode, autosave, stopWatch, poll, generation = 0, lastRevision = -1, resetEpoch = '', edits = 0, localSaved = false;
+let editingLocked = true, unlockTimer, editingKnown = false;
+window.formEditingLocked = true;
+function disableFields() {
+  for (const field of document.querySelectorAll('#configuracao input,#crise input,#crise textarea,#pais textarea,#votacao input,#votacao textarea,#votacao button')) field.disabled = editingLocked;
+  window.formEditingLocked = editingLocked; window.votingUI?.refresh();
+}
+function applyEditing(editing, reopen = true) {
+  if (!editing || typeof editing.locked !== 'boolean') return false;
+  const wasLocked = editingLocked;
+  editingKnown = true; editingLocked = editing.locked; disableFields(); clearTimeout(unlockTimer);
+  $('editing-notice').hidden = !editingLocked;
+  $('editing-message').textContent = editing.until
+    ? `O preenchimento está bloqueado até ${new Date(editing.until).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'short', timeStyle: 'short' })} (horário de Brasília). Você pode consultar os comitês normalmente.`
+    : 'O preenchimento está bloqueado pela organização. Você pode consultar os comitês normalmente.';
+  if (editingLocked) { autosave?.stop(); $('comite').disabled = false; }
+  if (editingLocked && editing.until) {
+    const remaining = Date.parse(editing.until) - editing.serverTime;
+    unlockTimer = setTimeout(refreshEditing, Math.max(250, Math.min(remaining + 100, 2147483647)));
+  }
+  if (reopen && wasLocked && !editingLocked && activeCode) { open(activeCode); return true; }
+  return false;
+}
+async function refreshEditing() { try { const data = await loadEditingStatus(); applyEditing(data.editing); } catch { if (!editingKnown) $('editing-message').textContent = 'Consultando a disponibilidade de preenchimento. Você pode visualizar o site enquanto isso.'; } }
 
 function showNotice(notice) {
   const banner = $('crisis-notice'); banner.hidden = !notice;
@@ -69,6 +92,7 @@ function restore(form) {
     }
   }
   window.votingUI.restore(form.state.voting);
+  disableFields();
 }
 async function initialForm(code) {
   let timer;
@@ -99,6 +123,7 @@ async function open(code) {
     const form = await initialForm(code);
     if (current !== generation) return;
     showNotice(form.notice);
+    applyEditing(form.editing, false);
     if ((form.resetEpoch || '') !== resetEpoch) {
       restore(form); dirty = false; edits = 0; lastRevision = form.revision;
     } else if (!edits && !dirty && lastRevision <= form.revision) {
@@ -118,18 +143,20 @@ async function open(code) {
   autosave = createAutosave(code, (state, _error, saved) => {
     if (current !== generation) return;
     if (state === 'reset') { open(code); return; }
+    if (state === 'blocked') { applyEditing(saved); return; }
     if (state === 'saved') {
       lastRevision = Math.max(lastRevision, saved.revision);
       window.votingUI.mergeHistory(saved.state.voting?.history);
       persist(false);
     }
     // Evita trocar de comitê durante um envio; a falha deixa a troca disponível.
-    $('comite').disabled = state === 'pending' || state === 'saving';
+    $('comite').disabled = !editingLocked && (state === 'pending' || state === 'saving');
   });
   const receive = update => {
     if (current !== generation) return;
+    if (applyEditing(update.editing)) return;
     if (Object.hasOwn(update, 'notice')) showNotice(update.notice);
-    if (update.type === 'crisis-state') return;
+    if (update.type === 'crisis-state' || update.type === 'editing-state') return;
     if ((update.resetEpoch || '') !== resetEpoch) { open(code); return; }
     if (autosave.hasPending() || update.revision <= lastRevision) return;
     lastRevision = update.revision;
@@ -139,10 +166,11 @@ async function open(code) {
   stopWatch = watchForm(code, receive);
   // Recupera avisos persistidos mesmo se a conexão ao vivo ficar indisponível.
   poll = setInterval(() => loadForm(code).then(receive).catch(() => {}), 30000);
-  if (dirty || edits > 0) autosave(read());
+  if (editingLocked) autosave.stop();
+  else if (dirty || edits > 0) autosave(read());
 }
 function capture(event) {
-  if (!activeCode || event.target.id === 'comite') return;
+  if (!activeCode || editingLocked || event.target.id === 'comite') return;
   if (event.type !== 'voting-change' && !event.target.matches('#veto,#sem-veto,.paises-veto input,.crise,.detalhamentocrise,.comentarios,#votacao input,#proposal')) return;
   edits++;
   persist(true);
@@ -157,5 +185,9 @@ window.addEventListener('beforeunload', event => {
 });
 const requested = new URL(location.href).searchParams.get('comite');
 const initial = committeeByCode(requested) ? requested : store.lastCommittee();
+disableFields();
+await refreshEditing();
+setInterval(refreshEditing, 30000);
 if (initial) await open(initial);
+
 

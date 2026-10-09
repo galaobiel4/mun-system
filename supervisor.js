@@ -1,6 +1,6 @@
-import { loadDashboard, watchDashboard, startCrisis } from './client.js';
-import { initAdminAuth } from './admin-auth.js';
-import { COMMITTEES } from './committees.js';
+import { loadDashboard, watchDashboard, startCrisis } from './client.js?v=20261008-lock-v1';
+import { initAdminAuth } from './admin-auth.js?v=20261008-lock-v1';
+import { COMMITTEES } from './committees.js?v=20261008-lock-v1';
 const $ = id => document.getElementById(id);
 const votes = { '': ['Sem voto', ''], favoravel: ['Favorável', 'yes'], abstido: ['Abstido', 'neutral'], contra: ['Contra', 'no'] };
 let stop, poll, models = new Map(), auth;
@@ -37,6 +37,7 @@ function renderCommittee(form) {
   const link = node('a', 'Abrir formulário deste comitê', 'form-link'); link.href = `index.html?comite=${encodeURIComponent(form.committee)}`; link.target = '_blank'; link.rel = 'noopener'; card.append(link);
 }
 function renderLastUpdate() {
+  if (!$('last-update')) return;
   const times = [...models.values()].map(form => Date.parse(form.updatedAt)).filter(Number.isFinite);
   $('last-update').textContent = times.length ? `Última atualização: ${new Date(Math.max(...times)).toLocaleTimeString('pt-BR')}` : 'Aguardando atualização';
 }
@@ -51,7 +52,7 @@ function consume(update) {
   renderOverview(); renderLastUpdate();
 }
 auth = await initAdminAuth({
-  onLogout() { stop?.(); clearInterval(poll); models.clear(); $('committee-grid').replaceChildren(); $('overview').replaceChildren(); renderLastUpdate(); },
+  onLogout() { stop?.(); clearInterval(poll); models.clear(); $('committee-grid')?.replaceChildren(); $('overview')?.replaceChildren(); renderLastUpdate(); },
   async onEnter(session, isCurrent) {
     const snapshot = await loadDashboard(session.token); if (!isCurrent()) return; consume(snapshot); $('dev-link').hidden = session.user.role !== 'dev';
     stop = watchDashboard(session.token, update => { if (isCurrent()) consume(update); }, (state, error) => { if (!isCurrent()) return; if (state === 'expired') { session.logout('Sessão expirada. Entre novamente.'); return; } const labels = { connected: 'Ao vivo · todos os comitês', connecting: 'Conectando…', reconnecting: 'Reconectando…', error: error || 'Sem conexão' }; status(labels[state], state === 'connected' ? 'live' : state === 'error' ? 'error' : ''); });
@@ -63,3 +64,4 @@ $('start-crisis-form').addEventListener('submit', async event => {
   try { const result = await startCrisis(token, { title: $('notice-title').value, message: $('notice-message').value }); if (auth.token === token) crisisState(result.system.crisis); }
   catch (error) { if (auth.token === token) { $('crisis-status').textContent = error.message; $('start-crisis').disabled = false; } }
 });
+
