@@ -1,18 +1,22 @@
+import { ensureControlSchema, auditStatement } from './control.js';
 const SESSION_MS = 8 * 60 * 60 * 1000, ITERATIONS = 100000;
 const encoder = new TextEncoder(), schemas = new WeakMap();
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS auth_users (id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL, password_hash TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at INTEGER NOT NULL)`,
-  `CREATE INDEX IF NOT EXISTS auth_sessions_user ON auth_sessions(user_id)`
+  `CREATE INDEX IF NOT EXISTS auth_sessions_user ON auth_sessions(user_id)`,
+  `CREATE TABLE IF NOT EXISTS auth_user_roles (user_id TEXT PRIMARY KEY, role TEXT NOT NULL CHECK(role IN ('supervisor', 'dev')))`
 ];
 const encode = bytes => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const decode = value => Uint8Array.from(atob(value.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
 const digest = async value => new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(value)));
 const same = (a, b) => { if (a.length !== b.length) return false; let d = 0; for (let i = 0; i < a.length; i++) d |= a[i] ^ b[i]; return d === 0; };
-const publicUser = row => ({ id: row.id, username: row.username, displayName: row.display_name, active: Boolean(row.active), createdAt: row.created_at });
+const publicUser = row => ({ id: row.id, username: row.username, displayName: row.display_name, active: Boolean(row.active), role: row.role || 'supervisor', createdAt: row.created_at });
+async function userRole(env, user) { const row = await env.DB.prepare('SELECT role FROM auth_user_roles WHERE user_id = ?').bind(user.id).first(); return { ...user, role: row?.role || 'supervisor' }; }
 const configured = env => [
   { username: env.SUPERVISOR_USER, password: env.SUPERVISOR_PASSWORD },
-  { username: env.SUPERVISOR_USER_2, password: env.SUPERVISOR_PASSWORD_2 }
+  { username: env.SUPERVISOR_USER_2, password: env.SUPERVISOR_PASSWORD_2 },
+  { username: env.DEV_USER, password: env.DEV_PASSWORD, role: 'dev' }
 ].filter(item => item.username && item.password);
 function ensureSchema(env) {
   let pending = schemas.get(env.DB);
@@ -55,20 +59,22 @@ async function issueSession(env, user) {
     env.DB.prepare('DELETE FROM auth_sessions WHERE expires_at <= ?').bind(Date.now()),
     env.DB.prepare('INSERT INTO auth_sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)').bind(encode(await digest(token)), user.id, expiresAt)
   ]);
-  return { token, expiresAt, user: publicUser(user) };
+  return { token, expiresAt, user: publicUser(await userRole(env, user)) };
 }
 async function importConfigured(env, account) {
   const hash = await hashPassword(account.password);
   await env.DB.prepare('INSERT OR IGNORE INTO auth_users (id, username, display_name, password_hash, active, created_at) VALUES (?, ?, ?, ?, 1, ?)')
     .bind(crypto.randomUUID(), account.username, account.username, hash, new Date().toISOString()).run();
-  return env.DB.prepare('SELECT * FROM auth_users WHERE username = ?').bind(account.username).first();
+  const user = await env.DB.prepare('SELECT * FROM auth_users WHERE username = ?').bind(account.username).first();
+  if (account.role === 'dev' && await passwordMatches(account.password, user.password_hash)) await env.DB.prepare("INSERT OR IGNORE INTO auth_user_roles (user_id, role) VALUES (?, 'dev')").bind(user.id).run();
+  return user;
 }
 export async function verifySession(env, token) {
   if (typeof token !== 'string' || token.length > 1000 || !token) return null;
   await ensureSchema(env);
   const row = await env.DB.prepare('SELECT u.*, s.expires_at FROM auth_sessions s JOIN auth_users u ON u.id = s.user_id WHERE s.token_hash = ? AND s.expires_at > ? AND u.active = 1')
     .bind(encode(await digest(token)), Date.now()).first();
-  if (row) return { expiresAt: row.expires_at, user: publicUser(row) };
+  if (row) return { expiresAt: row.expires_at, user: publicUser(await userRole(env, row)) };
   // Preserve existing signed sessions while migrating the configured accounts.
   try {
     const [payload, signature, extra] = token.split('.'); if (!payload || !signature || extra) return null;
@@ -78,7 +84,7 @@ export async function verifySession(env, token) {
       const key = await crypto.subtle.importKey('raw', await digest(`${account.username}\0${account.password}`), { name: 'HMAC', hash: 'SHA-256' }, false, ['verify']);
       if (!(await crypto.subtle.verify('HMAC', key, decode(signature), encoder.encode(payload)))) continue;
       const user = await env.DB.prepare('SELECT * FROM auth_users WHERE username = ?').bind(account.username).first() || await importConfigured(env, account);
-      if (user?.active && await passwordMatches(account.password, user.password_hash)) return { expiresAt: session.expiresAt, user: publicUser(user) };
+      if (user?.active && await passwordMatches(account.password, user.password_hash)) return { expiresAt: session.expiresAt, user: publicUser(await userRole(env, user)) };
     }
   } catch {}
   return null;
@@ -108,6 +114,7 @@ export async function handleAccounts(request, env, respond) {
       const result = await env.DB.prepare('INSERT INTO auth_users (id, username, display_name, password_hash, active, created_at) SELECT ?, ?, ?, ?, 1, ? WHERE NOT EXISTS (SELECT 1 FROM auth_users)')
         .bind(id, account.username, account.name, hash, new Date().toISOString()).run();
       if (!result.meta.changes) return respond({ error: 'O primeiro acesso já foi configurado.' }, 409);
+      await env.DB.prepare("INSERT INTO auth_user_roles (user_id, role) VALUES (?, 'dev')").bind(id).run();
       return respond(await issueSession(env, await env.DB.prepare('SELECT * FROM auth_users WHERE id = ?').bind(id).first()), 201);
     }
     if (typeof body.username !== 'string' || body.username.length > 100 || typeof body.password !== 'string' || body.password.length > 200) return respond({ error: 'Login ou senha inválidos.' }, 401);
@@ -126,22 +133,26 @@ export async function handleAccounts(request, env, respond) {
     await env.DB.prepare('DELETE FROM auth_sessions WHERE token_hash = ?').bind(encode(await digest(token))).run();
     return respond({ ok: true });
   }
+  if (session.user.role !== 'dev') return respond({ error: 'Esta ação exige acesso DEV.' }, 403);
   for (const account of configured(env)) {
     if (!(await env.DB.prepare('SELECT id FROM auth_users WHERE username = ?').bind(account.username).first())) await importConfigured(env, account);
   }
   if (path === '/api/users' && request.method === 'GET') {
     const offset = Number(url.searchParams.get('offset') || 0);
     if (!Number.isSafeInteger(offset) || offset < 0) return respond({ error: 'Página inválida.' }, 400);
-    const rows = await env.DB.prepare('SELECT id, username, display_name, active, created_at FROM auth_users ORDER BY created_at, id LIMIT 101 OFFSET ?').bind(offset).all();
+    const rows = await env.DB.prepare("SELECT u.id, u.username, u.display_name, u.active, u.created_at, COALESCE(r.role, 'supervisor') AS role FROM auth_users u LEFT JOIN auth_user_roles r ON r.user_id = u.id ORDER BY u.created_at, u.id LIMIT 101 OFFSET ?").bind(offset).all();
     return respond({ users: rows.results.slice(0, 100).map(publicUser), nextOffset: rows.results.length > 100 ? offset + 100 : null, currentUserId: session.user.id });
   }
   if (path === '/api/users' && request.method === 'POST') {
-    let account; try { account = newAccount(await bodyOf(request)); } catch (error) { return respond({ error: error.message }, 400); }
+    let account, role; try { const body = await bodyOf(request); account = newAccount(body); role = body.role || 'supervisor'; if (!['supervisor', 'dev'].includes(role)) throw new Error('Perfil inválido.'); } catch (error) { return respond({ error: error.message }, 400); }
     const hash = await hashPassword(account.password), id = crypto.randomUUID();
     const result = await env.DB.prepare('INSERT OR IGNORE INTO auth_users (id, username, display_name, password_hash, active, created_at) VALUES (?, ?, ?, ?, 1, ?)')
       .bind(id, account.username, account.name, hash, new Date().toISOString()).run();
     if (!result.meta.changes) return respond({ error: 'Esse login já está cadastrado.' }, 409);
-    return respond({ user: publicUser(await env.DB.prepare('SELECT * FROM auth_users WHERE id = ?').bind(id).first()) }, 201);
+    await ensureControlSchema(env);
+    await env.DB.prepare('INSERT INTO auth_user_roles (user_id, role) VALUES (?, ?)').bind(id, role).run();
+    await auditStatement(env, session.user.username, 'create-user', { username: account.username, role }).run();
+    return respond({ user: publicUser(await userRole(env, await env.DB.prepare('SELECT * FROM auth_users WHERE id = ?').bind(id).first())) }, 201);
   }
   const match = path.match(/^\/api\/users\/([A-Za-z0-9-]+)$/);
   if (match && request.method === 'PUT') {
@@ -157,12 +168,15 @@ export async function handleAccounts(request, env, respond) {
       hash = await hashPassword(body.password);
     }
     const active = Object.hasOwn(body, 'active') ? Number(body.active) : user.active;
-    const result = await env.DB.prepare('UPDATE auth_users SET password_hash = ?, active = ? WHERE id = ? AND (? = 1 OR (SELECT COUNT(*) FROM auth_users WHERE active = 1) > 1)')
-      .bind(hash, active, id, active).run();
+    const result = await env.DB.prepare("UPDATE auth_users SET password_hash = ?, active = ? WHERE id = ? AND (? = 1 OR NOT EXISTS (SELECT 1 FROM auth_user_roles WHERE user_id = ? AND role = 'dev') OR (SELECT COUNT(*) FROM auth_users u JOIN auth_user_roles r ON r.user_id = u.id WHERE u.active = 1 AND r.role = 'dev') > 1)")
+      .bind(hash, active, id, active, id).run();
     if (!result.meta.changes) return respond({ error: 'Mantenha pelo menos um administrador ativo.' }, 409);
     if (body.password || body.active === false) await revokeUser(env, id);
-    return respond({ user: publicUser({ ...user, active }), sessionRevoked: Boolean(body.password && id === session.user.id) });
+    await ensureControlSchema(env);
+    await auditStatement(env, session.user.username, 'update-user', { username: user.username, active: Boolean(active), passwordChanged: Object.hasOwn(body, 'password') }).run();
+    return respond({ user: publicUser(await userRole(env, { ...user, active })), sessionRevoked: Boolean(body.password && id === session.user.id) });
   }
   return respond({ error: 'Rota ou método não permitido.' }, 405);
 }
+
 

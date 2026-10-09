@@ -3,6 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "test": "node --test tests/*.test.js",
+    "test:backend": "wrangler deploy --dry-run --config backend/wrangler.toml --outdir .test-build && node --test tests/backend.integration.mjs",
     "dev:api": "wrangler dev --config backend/wrangler.toml",
     "db:local": "wrangler d1 migrations apply minionu --local --config backend/wrangler.toml",
     "db:remote": "wrangler d1 migrations apply minionu --remote --config backend/wrangler.toml",
@@ -10,3 +12,4 @@
   },
   "devDependencies": { "wrangler": "^4.0.0" }
 }
+

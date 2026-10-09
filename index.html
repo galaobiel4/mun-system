@@ -1,80 +1,100 @@
 <!DOCTYPE html>
-<html lang="pt-br">
-  <head>
-    <meta charset="UTF-8">
-    <title>MINIONU · Formulário de crise</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    
-    <link rel='stylesheet' href="style.css">
-    <link rel="stylesheet" href="live.css">
-  </head>
-  <body>
-  <header class='cabecalho'>
-    <h1 class='titulo'>MINIONU</h1>
-     
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>MiniONU Piedade · Painel do comitê</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#103778">
+  <link rel="icon" href="assets/minionu-piedade.png" type="image/png">
+  <link rel="preload" as="image" href="assets/minionu-piedade.png">
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="live.css">
+  <script src="loading.js" defer></script>
+</head>
+<body class="is-loading">
+  <div id="loading-screen" class="loading-screen" role="status" aria-label="Carregando MiniONU Piedade">
+    <img src="assets/minionu-piedade.png" alt="MiniONU — Colégio Nossa Senhora da Piedade" width="192" height="192" fetchpriority="high">
+    <span class="loading-line" aria-hidden="true"></span>
+  </div>
+  <noscript><style>.loading-screen{display:none}body.is-loading{overflow:auto}</style><p class="noscript-note">Ative o JavaScript para preencher e salvar o formulário.</p></noscript>
+  <div id="app-content">
+    <header class="cabecalho">
+      <div class="header-inner">
+        <a class="brand" href="./" aria-label="MiniONU Piedade — início">
+          <img class="brand-logo" src="assets/minionu-piedade.png" alt="Logo MiniONU Piedade" width="88" height="88">
+          <div class="brand-name"><h1 class="titulo">MiniONU</h1><span>Piedade</span></div>
+        </a>
+        <div class="header-caption">Colégio Nossa Senhora da Piedade<span>Simulação das Nações Unidas</span></div>
+      </div>
     </header>
-    <div class='div1'>
-        <!--SELEÇÃO DE COMITÊ -->
-      <select id='comite' name='comite' onchange="selecao(this.value)"> 
-      <option value='' disabled selected hidden>Selecione seu comitê </option>
-      <option value='CDH'>
-        CDH - Comissão de Direitos Humanos 
-      </option>
-      <option value='OMS'>
-        OMS - Organização Mundial da Saúde 
-      </option>
-      <option value='UNESCO'>Unesco 
-        - Organização das Nações Unidas para Educação, Ciência e Cultura</option>
-      <option value='ONUM'>
-        ONU Mulheres
-        - Entidade das Nações Unidaspara a Igualdade de Gênero e o Empoderamento das Mulheres
-      </option>
-      <option value='CSNU'>
-        CSNU - Conselho de Segurança das Nações Unidas
-      </option>
-      <option value='ACNUR'>
-        ACNUR - Alto Comissariado das Nações Unidas para Refugiados
-      </option>
-      <option value='CDESC'>
-        CDESC - Direitos econômicos, sociais e culturais da ONU
-      </option>
-      <option value='UNICEF'>
-        UNICEF - Fundo das Nações Unidas para a Infância
-      </option>
-        </select>
-        <br>
-        <!--CONFIGURAÇÕES COMITÊ -->
-        <label for='config'> Veto?</label> <br> 
-        <input type='radio' name="config" id=veto>Sim <br>
-        <input type='radio' name="config" id=sem-veto>Não
-        <br> 
-        <details class='paises-veto'>
-          <summary>Países com veto</summary>
-          
-        <input type='checkbox' name="config" id="brasil">Brasil<br>
-        <input type='checkbox' name='config' id='india'>Índia<br>
-        <input type='checkbox' name='config' id='eua'>EUA<br>
-        <input type='checkbox' name='config' id='turquia'>Turquia<br>
-        <input type='checkbox' name='config' id='russia'>Russia<br>
-        <input type='checkbox' name='config' id='china'>China<br>
-        <input type='checkbox' name='config' id='nigeria'>Nigéria<br>
-        <input type='checkbox' name='config' id='alemanha'>Alemanha<br>
-        <input type='checkbox' name='config' id='franca'>França<br>
-        <input type='checkbox' name='config' id='uk'>Reino Unido<br>
-        </details>
-          </div>
-<!--DIVISÓRIA --> <hr>
-    <!--Crise:Explicação e detalhamento-->
-    <div class=div2>
-      <h2>CRISE</h2>
-      <input class='crise' type=text placeholder='Insira a crise...' required>
-      <br>
-      <textarea class='detalhamentocrise' placeholder='Insira detalhamento e resolução...'></textarea>
-    </div>
-    <div id=pais></div>
-    <div class=votacao id=votacao>
-    </div>
-    <script src='script.js'></script>
-    <script type="module" src="live-integration.js"></script>
-  </body>
+    <nav class="page-nav" aria-label="Seções da página">
+      <div class="nav-inner">
+        <div class="nav-links"><a href="#configuracao">Comitê</a><a href="#crise">Crise</a><a href="#delegacoes">Delegações</a><a href="#votacao">Votações</a></div>
+        <span id="storage-status" class="storage-status" role="status" data-state="ready">Salvamento no navegador</span>
+      </div>
+    </nav>
+    <main class="page-shell">
+      <section id="crisis-notice" class="crisis-notice" role="alert" hidden>
+        <div><p class="eyebrow">Comunicado aos diretores</p><h2 id="crisis-notice-title"></h2><p id="crisis-notice-message"></p><small id="crisis-notice-time"></small></div>
+        <button type="button" id="crisis-notice-read">Entendi</button>
+      </section>
+      <div class="page-heading"><div><p class="eyebrow">MiniONU · Piedade</p><h2>Painel do comitê</h2></div><p>Organize a crise, acompanhe as delegações<br>e registre as decisões do seu comitê.</p></div>
+      <div class="form-layout">
+        <aside class="div1 panel" id="configuracao" aria-labelledby="committee-title">
+          <div class="section-heading"><span class="section-number">01</span><h2 id="committee-title">Seu comitê</h2></div>
+          <label class="field-label" for="comite">Selecione o comitê</label>
+          <select id="comite" name="comite">
+            <option value="" disabled selected>Selecione seu comitê</option>
+            <option value="CDH">CDH — Comissão de Direitos Humanos</option>
+            <option value="OMS">OMS — Organização Mundial da Saúde</option>
+            <option value="UNESCO">UNESCO — Educação, Ciência e Cultura</option>
+            <option value="ONUM">ONUM — ONU Mulheres</option>
+            <option value="CSNU">CSNU — Conselho de Segurança</option>
+            <option value="ACNUR">ACNUR — Alto Comissariado para Refugiados</option>
+            <option value="CDESC">CDESC — Direitos Econômicos, Sociais e Culturais</option>
+            <option value="UNICEF">UNICEF — Fundo para a Infância</option>
+          </select>
+          <fieldset class="veto-configuration">
+            <legend>Direito de veto</legend>
+            <div class="choice-row"><label><input type="radio" name="config" id="veto"> Sim</label><label><input type="radio" name="config" id="sem-veto" checked> Não</label></div>
+            <details class="paises-veto" hidden><summary>Países com veto</summary>
+              <div class="veto-countries">
+                <label><input type="checkbox" id="brasil"> Brasil</label>
+                <label><input type="checkbox" id="india"> Índia</label>
+                <label><input type="checkbox" id="eua"> EUA</label>
+                <label><input type="checkbox" id="turquia"> Turquia</label>
+                <label><input type="checkbox" id="russia"> Rússia</label>
+                <label><input type="checkbox" id="china"> China</label>
+                <label><input type="checkbox" id="nigeria"> Nigéria</label>
+                <label><input type="checkbox" id="alemanha"> Alemanha</label>
+                <label><input type="checkbox" id="franca"> França</label>
+                <label><input type="checkbox" id="uk"> Reino Unido</label>
+              </div>
+            </details>
+          </fieldset>
+          <div class="local-note"><span class="local-note-mark" aria-hidden="true">✓</span><p>Continue de onde parou.<br><span>As informações ficam salvas neste navegador, por comitê.</span></p></div>
+        </aside>
+        <div class="workspace">
+          <section class="div2 panel" id="crise" aria-labelledby="crisis-title">
+            <div class="section-heading"><span class="section-number">02</span><h2 id="crisis-title">Crise &amp; resolução</h2></div>
+            <label class="field-label" for="crisis-name">Título da crise</label>
+            <input class="crise" id="crisis-name" type="text" maxlength="500" placeholder="Qual é a situação em discussão?">
+            <label class="field-label" for="crisis-details">Detalhamento e resolução</label>
+            <textarea class="detalhamentocrise" id="crisis-details" maxlength="5000" rows="5" placeholder="Descreva o contexto, as medidas propostas e os encaminhamentos..."></textarea>
+          </section>
+          <section class="panel delegations-panel" id="delegacoes" aria-labelledby="delegations-title">
+            <div class="section-heading"><span class="section-number">03</span><h2 id="delegations-title">Delegações</h2></div>
+            <p class="section-description">Abra um país para registrar os comentários sobre sua participação.</p>
+            <div id="pais"><p class="empty-state">Selecione seu comitê para visualizar as delegações.</p></div>
+          </section>
+          <div class="votacao panel" id="votacao"><div class="section-heading"><span class="section-number">04</span><h2>Votações</h2></div><p class="empty-state">Selecione seu comitê para iniciar uma votação.</p></div>
+        </div>
+      </div>
+      <footer class="page-footer"><span>MiniONU <b>Piedade</b></span><span>Diálogo, cooperação e novas perspectivas.</span></footer>
+    </main>
+  </div>
+  <script type="module" src="script.js"></script>
+  <script type="module" src="live-integration.js"></script>
+</body>
 </html>
+

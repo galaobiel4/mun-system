@@ -14,6 +14,11 @@ export const listUsers = (token, offset = 0) => call(`/api/users?offset=${offset
 export const createUser = (token, body) => call('/api/users', 'POST', body, token);
 export const updateUser = (token, id, body) => call(`/api/users/${encodeURIComponent(id)}`, 'PUT', body, token);
 export const loadDashboard = token => call('/api/dashboard', 'GET', undefined, token);
+export const startCrisis = (token, body) => call('/api/crisis/start', 'POST', body, token);
+export const devStatus = token => call('/api/dev/status', 'GET', undefined, token);
+export const exportBackup = token => call('/api/dev/backup', 'GET', undefined, token);
+export const resetAll = token => call('/api/dev/reset', 'POST', { confirmation: 'RESETAR TODOS' }, token);
+export const endCrisis = token => call('/api/dev/crisis/end', 'POST', {}, token);
 export const loadForm = code => call(`/api/committees/${encodeURIComponent(code)}`);
 export const saveForm = (code, form) => call(`/api/committees/${encodeURIComponent(code)}`, 'PUT', form);
 function watch(path, token, onUpdate, onStatus) {
@@ -41,7 +46,7 @@ export function createAutosave(code, onStatus = () => {}) {
     timer = undefined; if (stopped || busy || !pending) return;
     busy = true; const snapshot = pending; pending = undefined; onStatus('saving'); let failed = false;
     try { const saved = await saveForm(code, snapshot); if (!pending) onStatus('saved', undefined, saved); }
-    catch (error) { failed = true; pending ||= snapshot; onStatus('error', error.message); }
+    catch (error) { failed = true; pending ||= snapshot; if (error.status === 409) { stopped = true; pending = undefined; onStatus('reset', error.message); } else onStatus('error', error.message); }
     finally { busy = false; if (!stopped && pending) timer = setTimeout(flush, failed ? 2000 : 0); }
   }
   const enqueue = snapshot => { if (stopped) return; pending = snapshot; onStatus('pending'); if (!timer && !busy) timer = setTimeout(flush, 150); };
@@ -49,4 +54,5 @@ export function createAutosave(code, onStatus = () => {}) {
   enqueue.hasPending = () => Boolean(pending || busy);
   return enqueue;
 }
+
 

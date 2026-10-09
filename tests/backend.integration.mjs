@@ -1,0 +1,72 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
+import { emptyForm, COMMITTEES } from '../committees.js';
+test('D1 e Durable Objects: permissões DEV, usuários, crise persistida, reset e cópias antigas', async () => {
+  const mf = new Miniflare(convertV4MiniflareOptions({ modules: true, scriptPath: 'backend/.test-build/index.js', compatibilityDate: '2026-10-07',
+    d1Databases: { DB: 'isolated-test' }, durableObjects: { ROOMS: { className: 'RoomLiveUpdates', useSQLite: true }, DASHBOARD: { className: 'GlobalDashboard', useSQLite: true } },
+    bindings: { ALLOWED_ORIGINS: 'http://localhost:5500', DEV_USER: 'devlocal', DEV_PASSWORD: 'SenhaLocalParaTestes123', SUPERVISOR_USER: 'supervisorlocal', SUPERVISOR_PASSWORD: 'OutraSenhaLocalTestes123' }
+  }));
+  try {
+    const db = await mf.getD1Database('DB');
+    for (const filename of ['0001_rooms.sql', '0002_global_forms.sql', '0003_users.sql', '0004_dev_control.sql']) {
+      const sql = await readFile(`backend/migrations/${filename}`, 'utf8');
+      await db.batch(sql.split(';').map(s => s.trim()).filter(Boolean).map(s => db.prepare(s)));
+    }
+    const api = async (path, method = 'GET', body, token) => {
+      const response = await mf.dispatchFetch('http://local.test/api' + path, { method, headers: { Origin: 'http://localhost:5500', 'content-type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) });
+      return { status: response.status, data: await response.json() };
+    };
+    const dev = await api('/auth/login', 'POST', { username: 'devlocal', password: 'SenhaLocalParaTestes123' });
+    assert.equal(dev.status, 200); assert.equal(dev.data.user.role, 'dev');
+    const supervisor = await api('/auth/login', 'POST', { username: 'supervisorlocal', password: 'OutraSenhaLocalTestes123' });
+    assert.equal(supervisor.status, 200); assert.equal(supervisor.data.user.role, 'supervisor');
+    const token = dev.data.token, other = supervisor.data.token;
+    const sockets = [], messages = [];
+    for (const c of COMMITTEES) {
+      const response = await mf.dispatchFetch(`http://local.test/api/committees/${c.code}/live`, { headers: { Origin: 'http://localhost:5500', Upgrade: 'websocket' } });
+      assert.equal(response.status, 101); const socket = response.webSocket; socket.accept();
+      const received = []; socket.addEventListener('message', event => received.push(JSON.parse(event.data))); sockets.push(socket); messages.push(received);
+    }
+    const delivered = async (predicate) => { const deadline = Date.now() + 3000; while (!messages.every(predicate)) { if (Date.now() > deadline) assert.fail('Aviso não chegou a todos os sockets.'); await new Promise(resolve => setTimeout(resolve, 10)); } };
+    for (const path of ['/dev/status', '/dev/backup', '/users']) { assert.equal((await api(path)).status, 401); assert.equal((await api(path, 'GET', undefined, other)).status, 403); }
+    assert.equal((await api('/dev/reset', 'POST', { confirmation: 'RESETAR TODOS' }, other)).status, 403);
+    assert.equal((await api('/dashboard', 'GET', undefined, other)).data.committees.length, 8);
+    const created = await api('/users', 'POST', { username: 'novo-supervisor', displayName: 'Teste', password: 'SenhaDoNovoUsuario123', role: 'supervisor' }, token);
+    assert.equal(created.status, 201); assert.equal(created.data.user.role, 'supervisor');
+    const newLogin = await api('/auth/login', 'POST', { username: 'novo-supervisor', password: 'SenhaDoNovoUsuario123' });
+    assert.equal(newLogin.status, 200);
+    assert.equal((await api('/users/' + created.data.user.id, 'PUT', { active: false }, token)).status, 200);
+    assert.equal((await api('/auth/me', 'GET', undefined, newLogin.data.token)).status, 401);
+    assert.equal((await api('/users/' + dev.data.user.id, 'PUT', { active: false }, token)).status, 409);
+    const room = await api('/committees/CDH'); assert.equal(room.status, 200);
+    const form = { ...room.data, crisisTitle: 'Dados anteriores ao reset' };
+    assert.equal((await api('/committees/CDH', 'PUT', form)).status, 200);
+    const started = await api('/crisis/start', 'POST', { title: 'Crise local', message: 'Aviso aos diretores' }, other);
+    assert.equal(started.status, 200);
+    await delivered(received => received.some(event => event.type === 'crisis-state' && event.notice?.id === started.data.system.crisis.id));
+    assert.equal((await api('/crisis/start', 'POST', {}, other)).status, 409);
+    for (const c of COMMITTEES) assert.equal((await api('/committees/' + c.code)).data.notice.id, started.data.system.crisis.id);
+    assert.equal((await api('/dashboard', 'GET', undefined, token)).data.system.crisis.title, 'Crise local');
+    const backup = await api('/dev/backup', 'GET', undefined, token);
+    assert.equal(backup.status, 200); assert.equal(backup.data.dashboard.committees.find(c => c.committee === 'CDH').crisisTitle, form.crisisTitle); assert.ok(backup.data.events.length);
+    assert.equal((await api('/dev/reset', 'POST', { confirmation: 'errada' }, token)).status, 400);
+    assert.equal((await api('/committees/CDH')).data.crisisTitle, form.crisisTitle);
+    const reset = await api('/dev/reset', 'POST', { confirmation: 'RESETAR TODOS' }, token);
+    assert.equal(reset.status, 200); assert.equal(reset.data.resetCount, 8);
+    await delivered(received => received.some(event => event.type === 'form-reset' && event.resetEpoch === reset.data.system.resetEpoch));
+    for (const c of COMMITTEES) { const clean = (await api('/committees/' + c.code)).data; assert.equal(clean.resetEpoch, reset.data.system.resetEpoch); assert.equal(clean.crisisTitle, ''); assert.equal(clean.notice, null); assert.equal(clean.state.voting.history.length, 0); }
+    assert.equal((await api('/committees/CDH', 'PUT', form)).status, 409);
+    const fresh = (await api('/committees/CDH')).data; fresh.crisisTitle = 'Depois do reset';
+    assert.equal((await api('/committees/CDH', 'PUT', fresh)).status, 200);
+    assert.equal((await api('/users', 'GET', undefined, token)).data.users.length, 3);
+    assert.ok((await api('/dev/status', 'GET', undefined, token)).data.audit.some(e => e.action === 'reset'));
+    assert.equal((await api('/crisis/start', 'POST', { title: 'Nova crise', message: 'Segundo aviso' }, token)).status, 200);
+    assert.equal((await api('/dev/crisis/end', 'POST', {}, token)).status, 200);
+    assert.equal((await api('/committees/CDH')).data.notice, null);
+    const malformed = emptyForm('CDH'); malformed.state.delegations.pop();
+    assert.equal((await api('/committees/CDH', 'PUT', malformed)).status, 400);
+    for (const socket of sockets) socket.close();
+  } finally { await mf.dispose(); }
+});

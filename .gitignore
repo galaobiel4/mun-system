@@ -4,3 +4,6 @@ backend/.wrangler/
 .dev.vars
 backend/.dev.vars
 _site/
+.test-build/
+backend/.test-build/
+

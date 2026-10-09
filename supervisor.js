@@ -1,9 +1,9 @@
-import { login, loadDashboard, watchDashboard, authStatus, setupAccount, currentUser, endSession, listUsers, createUser, updateUser } from './client.js';
+import { loadDashboard, watchDashboard, startCrisis } from './client.js';
+import { initAdminAuth } from './admin-auth.js';
 import { COMMITTEES } from './committees.js';
-const $ = id => document.getElementById(id), SESSION = 'minionu-supervisor-session';
+const $ = id => document.getElementById(id);
 const votes = { '': ['Sem voto', ''], favoravel: ['Favorável', 'yes'], abstido: ['Abstido', 'neutral'], contra: ['Contra', 'no'] };
-let stop, expiry, generation = 0, models = new Map();
-let activeSession, signedInUser, nextUsersOffset = null, passwordUser;
+let stop, poll, models = new Map(), auth;
 const node = (tag, text, cls) => { const el = document.createElement(tag); if (text !== undefined) el.textContent = text; if (cls) el.className = cls; return el; };
 function status(message, cls = '') { $('status').textContent = message; $('status').className = `status ${cls}`; }
 function format(value) { if (Array.isArray(value)) return value.join(', ') || 'Nenhum'; if (typeof value === 'boolean') return value ? 'Sim' : 'Não'; return value || 'Vazio'; }
@@ -20,124 +20,45 @@ function renderOverview() {
 }
 function renderCommittee(form, changes = []) {
   let card = $(`committee-${form.committee}`);
-  if (!card) { card = node('article', undefined, 'committee-card'); card.id = `committee-${form.committee}`; $('committee-grid').append(card); }
-  card.replaceChildren();
-  const header = node('div', undefined, 'committee-header');
+  if (!card) { card = node('article', undefined, 'committee-card panel'); card.id = `committee-${form.committee}`; $('committee-grid').append(card); }
+  card.replaceChildren(); const header = node('div', undefined, 'committee-header');
   header.append(node('h2', form.committee), node('span', form.activeEditors ? `Aberto · ${form.activeEditors}` : 'Fechado', `presence ${form.activeEditors ? 'live' : ''}`));
   card.append(header, node('p', form.name || COMMITTEES.find(c => c.code === form.committee).name, 'committee-name'));
   const crisis = node('div', undefined, 'crisis'); crisis.append(node('small', 'Crise'), node('strong', form.crisisTitle || 'Nenhuma crise informada')); card.append(crisis);
   const details = node('div', undefined, 'crisis'); details.append(node('small', 'Detalhamento e resolução'), node('div', form.crisisDetails || 'Ainda não informado', 'description')); card.append(details);
   card.append(node('div', form.hasVeto ? `Veto: sim · ${(form.state.vetoCountries || []).join(', ') || 'Nenhum país selecionado'}` : 'Veto: não', 'veto'));
-  const counts = count(form), totals = node('div', undefined, 'totals');
-  for (const [vote, [label, cls]] of Object.entries(votes)) totals.append(node('span', `${counts[vote]} ${label}`, cls)); card.append(totals);
+  const counts = count(form), totals = node('div', undefined, 'totals'); for (const [vote, [label, cls]] of Object.entries(votes)) totals.append(node('span', `${counts[vote]} ${label}`, cls)); card.append(totals);
   const table = node('table'), head = node('thead'), labels = node('tr'); for (const title of ['Delegação', 'Voto', 'Comentário']) labels.append(node('th', title)); head.append(labels); table.append(head); const body = node('tbody');
-  for (const d of form.state.delegations) {
-    const row = node('tr', undefined, changes.some(change => change.country === d.country) ? 'changed' : '');
-    const vote = node('td'); vote.append(node('span', votes[d.vote][0], `vote ${votes[d.vote][1]}`)); row.append(node('td', d.country), vote, node('td', d.comment || '—')); body.append(row);
-  }
+  for (const d of form.state.delegations) { const row = node('tr', undefined, changes.some(c => c.country === d.country) ? 'changed' : ''); const vote = node('td'); vote.append(node('span', votes[d.vote][0], `vote ${votes[d.vote][1]}`)); row.append(node('td', d.country), vote, node('td', d.comment || '—')); body.append(row); }
   table.append(body); const scroll = node('div', undefined, 'table-scroll'); scroll.append(table); card.append(scroll);
+  const history = form.state.voting?.history || [], voting = node('details', undefined, 'committee-voting'); voting.append(node('summary', `Votações registradas · ${history.length}`));
+  if (form.state.voting?.proposal) voting.append(node('p', `Em votação: ${form.state.voting.proposal}`));
+  for (const record of [...history].reverse()) { const item = node('div', undefined, 'vote-record'); item.append(node('strong', record.proposal), node('span', `${record.result === 'approved' ? 'Aprovada' : 'Recusada'} · ${record.method === 'visual' ? 'Contraste visual' : 'Votos das delegações'}`, record.result === 'approved' ? 'yes' : 'no')); voting.append(item); }
+  if (!history.length) voting.append(node('p', 'Nenhuma votação registrada.')); card.append(voting);
   card.append(node('p', form.updatedAt ? `Última atualização: ${new Date(form.updatedAt).toLocaleTimeString('pt-BR')}` : 'Aguardando abertura do formulário', 'meta'));
   const link = node('a', 'Abrir formulário deste comitê', 'form-link'); link.href = `index.html?comite=${encodeURIComponent(form.committee)}`; link.target = '_blank'; link.rel = 'noopener'; card.append(link);
-  if (changes.length) { card.classList.remove('changed'); void card.offsetWidth; card.classList.add('changed'); }
 }
-function eventCard(event) {
-  const card = node('article', undefined, 'event'); card.dataset.event = `${event.committee}-${event.revision}`;
-  card.append(node('time', new Date(event.updatedAt).toLocaleString('pt-BR')), node('h3', event.committee));
-  for (const change of event.changes) card.append(node('p', `${change.label}: ${format(change.before)} → ${format(change.after)}`)); return card;
-}
+function eventCard(event) { const card = node('article', undefined, 'event'); card.dataset.event = `${event.committee}-${event.revision}`; card.append(node('time', new Date(event.updatedAt).toLocaleString('pt-BR')), node('h3', event.committee)); for (const change of event.changes) card.append(node('p', `${change.label}: ${format(change.before)} → ${format(change.after)}`)); return card; }
+function crisisState(notice) { $('start-crisis').disabled = Boolean(notice); $('start-crisis').textContent = notice ? 'Crise em andamento' : 'Iniciar crise'; $('crisis-status').textContent = notice ? `Aviso enviado: ${notice.title} · ${new Date(notice.startedAt).toLocaleString('pt-BR')}` : ''; }
 function consume(update) {
-  if (update.type === 'dashboard-snapshot') {
-    models = new Map(update.committees.map(form => [form.committee, form])); $('committee-grid').replaceChildren(); for (const form of update.committees) renderCommittee(form);
-    $('events').replaceChildren(...update.recentEvents.map(eventCard));
-  } else {
-    const previous = models.get(update.committee); if (!previous) return;
+  if (update.type === 'crisis-state') { crisisState(update.notice); return; }
+  if (update.type === 'dashboard-snapshot') { models = new Map(update.committees.map(form => [form.committee, form])); $('committee-grid').replaceChildren(); for (const form of update.committees) renderCommittee(form); $('events').replaceChildren(...update.recentEvents.map(eventCard)); crisisState(update.system?.crisis); }
+  else { const previous = models.get(update.committee); if (!previous) return;
     if (update.type === 'presence') { previous.activeEditors = update.activeEditors; renderCommittee(previous); }
-    if (update.type === 'form-update' && update.revision >= previous.revision) {
-      const form = { ...previous, ...update }; models.set(update.committee, form); renderCommittee(form, update.changes);
-      if (!$('events').querySelector(`[data-event="${update.committee}-${update.revision}"]`)) { $('events').querySelector('.empty')?.remove(); $('events').prepend(eventCard(update)); }
-    }
+    if (update.type === 'form-update' && update.revision >= previous.revision) { const form = { ...previous, ...update }; models.set(update.committee, form); renderCommittee(form, update.changes); if (!$('events').querySelector(`[data-event="${update.committee}-${update.revision}"]`)) { $('events').querySelector('.empty')?.remove(); $('events').prepend(eventCard(update)); } }
   }
-  renderOverview(); while ($('events').children.length > 50) $('events').lastElementChild.remove();
-  if (!$('events').children.length) $('events').append(node('p', 'Nenhuma alteração recebida ainda.', 'empty'));
+  renderOverview(); while ($('events').children.length > 50) $('events').lastElementChild.remove(); if (!$('events').children.length) $('events').append(node('p', 'Nenhuma alteração recebida ainda.', 'empty'));
 }
-function logout(message = '') { generation++; stop?.(); clearTimeout(expiry); activeSession = undefined; signedInUser = undefined; $('password-dialog').close(); $('reset-password-form').reset(); $('create-user-form').reset(); $('users-area').hidden = true; $('users-toggle').setAttribute('aria-expanded', 'false'); $('users-list').replaceChildren(); sessionStorage.removeItem(SESSION); models.clear(); $('committee-grid').replaceChildren(); $('overview').replaceChildren(); $('events').replaceChildren(); $('panel').hidden = true; $('login-area').hidden = false; $('password').value = ''; $('login-error').textContent = message; }
-async function enter(session) {
-  const current = ++generation; stop?.(); clearTimeout(expiry);
-  if (session.expiresAt <= Date.now()) { logout('Sessão expirada. Entre novamente.'); return; }
-  try {
-    const [snapshot, identity] = await Promise.all([loadDashboard(session.token), currentUser(session.token)]); if (current !== generation) return;
-    activeSession = session; signedInUser = identity.user;
-    consume(snapshot); $('login-area').hidden = true; $('panel').hidden = false; sessionStorage.setItem(SESSION, JSON.stringify(session)); $('password').value = '';
-    expiry = setTimeout(() => logout('Sessão expirada. Entre novamente.'), session.expiresAt - Date.now());
-    stop = watchDashboard(session.token, update => { if (current === generation) consume(update); }, (state, error) => {
-      if (current !== generation) return; if (state === 'expired') { logout('Sessão expirada. Entre novamente.'); return; }
-      const labels = { connected: 'Ao vivo · todos os comitês', connecting: 'Conectando…', reconnecting: 'Reconectando…', error: error || 'Sem conexão' }; status(labels[state], state === 'connected' ? 'live' : state === 'error' ? 'error' : '');
-    });
-  } catch (error) { logout(error.message); }
-}
-$('login-form').addEventListener('submit', async event => {
-  event.preventDefault(); $('login-button').disabled = true; $('login-error').textContent = '';
-  try { await enter(await login($('username').value.trim(), $('password').value)); } catch (error) { $('login-error').textContent = error.message; }
-  finally { $('login-button').disabled = false; }
-});
-$('logout').addEventListener('click', () => { const token = activeSession?.token; logout(); if (token) endSession(token).catch(() => {}); });
-function usersMessage(message, error = false) { $('users-message').textContent = message; $('users-message').className = error ? 'error-text' : 'success-text'; }
-async function loadUsers(append = false) {
-  const token = activeSession?.token; if (!token) return;
-  const data = await listUsers(token, append ? nextUsersOffset : 0); if (activeSession?.token !== token) return;
-  if (!append) $('users-list').replaceChildren();
-  for (const user of data.users) {
-    const row = node('tr'), identity = node('td'), actions = node('td'), own = user.id === signedInUser.id;
-    identity.append(node('strong', user.displayName), node('div', `${user.username}${own ? ' · você' : ''}`, 'meta'));
-    const reset = node('button', 'Alterar senha', 'secondary'); reset.type = 'button';
-    reset.addEventListener('click', () => { passwordUser = user; $('reset-password-form').reset(); $('reset-error').textContent = ''; $('password-dialog-user').textContent = `${user.displayName} · ${user.username}`; $('password-dialog').showModal(); $('reset-password').focus(); });
-    const toggle = node('button', user.active ? 'Desativar' : 'Ativar', 'secondary'); toggle.type = 'button'; toggle.disabled = own;
-    if (own) toggle.title = 'Você não pode desativar seu próprio acesso.';
-    toggle.addEventListener('click', async () => {
-      toggle.disabled = true;
-      try { await updateUser(activeSession.token, user.id, { active: !user.active }); await loadUsers(); usersMessage(user.active ? 'Acesso desativado e sessões encerradas.' : 'Acesso ativado.'); }
-      catch (error) { usersMessage(error.message, true); } finally { toggle.disabled = own; }
-    });
-    actions.append(reset, toggle); row.append(identity, node('td', user.active ? 'Ativo' : 'Desativado'), actions); $('users-list').append(row);
+auth = await initAdminAuth({
+  onLogout() { stop?.(); clearInterval(poll); models.clear(); $('committee-grid').replaceChildren(); $('overview').replaceChildren(); $('events').replaceChildren(); },
+  async onEnter(session, isCurrent) {
+    const snapshot = await loadDashboard(session.token); if (!isCurrent()) return; consume(snapshot); $('dev-link').hidden = session.user.role !== 'dev';
+    stop = watchDashboard(session.token, update => { if (isCurrent()) consume(update); }, (state, error) => { if (!isCurrent()) return; if (state === 'expired') { session.logout('Sessão expirada. Entre novamente.'); return; } const labels = { connected: 'Ao vivo · todos os comitês', connecting: 'Conectando…', reconnecting: 'Reconectando…', error: error || 'Sem conexão' }; status(labels[state], state === 'connected' ? 'live' : state === 'error' ? 'error' : ''); });
+    poll = setInterval(() => loadDashboard(session.token).then(data => { if (isCurrent()) consume(data); }).catch(() => {}), 30000);
   }
-  nextUsersOffset = data.nextOffset; $('users-more').hidden = nextUsersOffset === null;
-}
-$('users-toggle').addEventListener('click', async () => {
-  const open = $('users-area').hidden; $('users-area').hidden = !open; $('users-toggle').setAttribute('aria-expanded', String(open));
-  if (open) { try { await loadUsers(); usersMessage(''); } catch (error) { usersMessage(error.message, true); } }
 });
-$('users-more').addEventListener('click', async () => { $('users-more').disabled = true; try { await loadUsers(true); } catch (error) { usersMessage(error.message, true); } finally { $('users-more').disabled = false; } });
-$('create-user-form').addEventListener('submit', async event => {
-  event.preventDefault(); const button = event.submitter; button.disabled = true;
-  try {
-    if ($('new-user-password').value !== $('new-user-confirm').value) throw new Error('As senhas não conferem.');
-    await createUser(activeSession.token, { displayName: $('new-user-name').value.trim(), username: $('new-user-login').value.trim(), password: $('new-user-password').value });
-    $('create-user-form').reset(); await loadUsers(); usersMessage('Usuário criado. Ele já pode entrar no painel.');
-  } catch (error) { usersMessage(error.message, true); } finally { button.disabled = false; }
+$('start-crisis-form').addEventListener('submit', async event => {
+  event.preventDefault(); const token = auth.token; if (!token) return; $('start-crisis').disabled = true;
+  try { const result = await startCrisis(token, { title: $('notice-title').value, message: $('notice-message').value }); if (auth.token === token) crisisState(result.system.crisis); }
+  catch (error) { if (auth.token === token) { $('crisis-status').textContent = error.message; $('start-crisis').disabled = false; } }
 });
-$('password-cancel').addEventListener('click', () => { $('password-dialog').close(); $('reset-password-form').reset(); });
-$('reset-password-form').addEventListener('submit', async event => {
-  event.preventDefault(); const button = event.submitter; button.disabled = true;
-  try {
-    if ($('reset-password').value !== $('reset-confirm').value) throw new Error('As senhas não conferem.');
-    const result = await updateUser(activeSession.token, passwordUser.id, { password: $('reset-password').value });
-    $('password-dialog').close(); $('reset-password-form').reset();
-    if (result.sessionRevoked) logout('Senha alterada. Entre com sua nova senha.'); else usersMessage('Senha alterada. As sessões anteriores desse usuário foram encerradas.');
-  } catch (error) { $('reset-error').textContent = error.message; } finally { button.disabled = false; }
-});
-$('setup-form').addEventListener('submit', async event => {
-  event.preventDefault(); const button = event.submitter; button.disabled = true; $('setup-error').textContent = '';
-  try {
-    if ($('setup-password').value !== $('setup-confirm').value) throw new Error('As senhas não conferem.');
-    const session = await setupAccount({ activationPassword: $('activation-password').value, displayName: $('setup-name').value.trim(), username: $('setup-username').value.trim(), password: $('setup-password').value });
-    $('setup-form').reset(); $('setup-form').hidden = true; $('login-form').hidden = false; await enter(session);
-  } catch (error) { $('setup-error').textContent = error.message; } finally { button.disabled = false; }
-});
-async function showAuthState() {
-  try { const state = await authStatus(); $('setup-form').hidden = !state.needsSetup || !state.canSetup; $('login-form').hidden = state.needsSetup && state.canSetup;
-    if (state.needsSetup && !state.canSetup) $('login-error').textContent = 'Configure a senha de ativação administrativa no servidor para iniciar o primeiro acesso.';
-  } catch (error) { $('login-error').textContent = error.message; }
-}
-await showAuthState();
-try { const session = JSON.parse(sessionStorage.getItem(SESSION) || 'null'); if (session) await enter(session); } catch { logout(); }
-

@@ -1,6 +1,8 @@
 import { COMMITTEES, COUNTRIES, committeeByCode, emptyForm } from '../../committees.js';
 import { handleAccounts, verifySession } from './users.js';
-const MAX_BODY = 64000;
+import { normalizeVoting, MAX_VOTATIONS } from '../../voting.js';
+import { ensureControlSchema, systemState, systemStatement, auditStatement, auditEvents } from './control.js';
+const MAX_BODY = 4000000;
 const VOTES = new Set(['', 'favoravel', 'abstido', 'contra']);
 const VOTE_LABELS = { '': 'Sem voto', favoravel: 'Favorável', abstido: 'Abstido', contra: 'Contra' };
 const json = (data, status = 200, headers = {}) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers } });
@@ -13,11 +15,27 @@ export default {
     const cors = allowed ? { 'access-control-allow-origin': origin, 'access-control-allow-methods': 'GET, PUT, POST, OPTIONS', 'access-control-allow-headers': 'Content-Type, Authorization', vary: 'Origin' } : {};
     const respond = (data, status = 200) => json(data, status, cors);
     const url = new URL(request.url);
-    if (url.pathname === '/api/health') return respond({ ok: true });
+    if (url.pathname === '/api/health') return respond({ ok: true, version: '2026-10-dev-crisis' });
     if (request.method === 'OPTIONS') return new Response(null, { status: allowed ? 204 : 403, headers: cors });
     if (!allowed) return respond({ error: 'Origem não autorizada.' }, 403);
     try {
       if (url.pathname.startsWith('/api/auth/') || url.pathname === '/api/users' || url.pathname.startsWith('/api/users/')) return await handleAccounts(request, env, respond);
+      if (url.pathname.startsWith('/api/dev/') || url.pathname === '/api/crisis/start') {
+        const session = await verifySession(env, request.headers.get('Authorization')?.replace(/^Bearer\s+/i, ''));
+        if (!session) return respond({ error: 'Entre no painel para continuar.' }, 401);
+        const isStart = url.pathname === '/api/crisis/start';
+        if (!isStart && session.user.role !== 'dev') return respond({ error: 'Esta ação exige acesso DEV.' }, 403);
+        const routes = { '/api/dev/status': 'status', '/api/dev/backup': 'backup', '/api/dev/reset': 'reset', '/api/dev/crisis/end': 'end-crisis', '/api/crisis/start': 'start-crisis' };
+        const action = routes[url.pathname];
+        if (!action) return respond({ error: 'Rota não encontrada.' }, 404);
+        if (request.method !== (['status', 'backup'].includes(action) ? 'GET' : 'POST')) return respond({ error: 'Método não permitido.' }, 405);
+        const body = request.method === 'POST' ? await readJson(request) : {};
+        if (action === 'reset' && body?.confirmation !== 'RESETAR TODOS') return respond({ error: 'Digite RESETAR TODOS para confirmar.' }, 400);
+        if (action === 'start-crisis') { body.title = text(body.title, 500).trim() || 'A crise começou'; body.message = text(body.message, 2000).trim() || 'A crise foi iniciada. Acompanhe as orientações e registre os acontecimentos do seu comitê.'; }
+        const stub = env.DASHBOARD.get(env.DASHBOARD.idFromName('all-committees'));
+        const response = await stub.fetch(`https://dashboard.internal/control/${action}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...body, actor: session.user.username }) });
+        return respond(await response.json(), response.status);
+      }
       if (url.pathname === '/api/dashboard' || url.pathname === '/api/dashboard/live') {
         if (request.method !== 'GET') return respond({ error: 'Método não permitido.' }, 405);
         const live = url.pathname.endsWith('/live');
@@ -58,29 +76,44 @@ export class RoomLiveUpdates {
   async handle(request) {
     const code = request.headers.get('x-committee-code');
     if (!committeeByCode(code)) return json({ error: 'Comitê inválido.' }, 400);
+    const system = await systemState(this.env);
     let row = await this.env.DB.prepare('SELECT * FROM committee_forms WHERE code = ?').bind(code).first();
     if (!row) {
       const now = new Date().toISOString();
-      await this.env.DB.prepare('INSERT INTO committee_forms (code, form_json, revision, created_at, updated_at) VALUES (?, ?, 0, ?, ?)').bind(code, JSON.stringify(emptyForm(code)), now, now).run();
+      await this.env.DB.prepare('INSERT OR IGNORE INTO committee_forms (code, form_json, revision, created_at, updated_at) VALUES (?, ?, 0, ?, ?)').bind(code, JSON.stringify({ ...emptyForm(code), resetEpoch: system.resetEpoch }), now, now).run();
       row = await this.env.DB.prepare('SELECT * FROM committee_forms WHERE code = ?').bind(code).first();
     }
     const path = new URL(request.url).pathname;
-    if (path === '/snapshot') return json(formSnapshot(row));
+    const snapshot = () => ({ ...formSnapshot(row), notice: system.crisis });
+    if (path === '/snapshot') return json(snapshot());
+    if (path === '/invalidate' || path === '/notice') {
+      const message = path === '/invalidate' ? { type: 'form-reset', ...snapshot() } : { type: 'crisis-state', notice: system.crisis };
+      for (const socket of this.state.getWebSockets()) { try { socket.send(JSON.stringify(message)); } catch {} }
+      return json({ ok: true });
+    }
     if (path === '/connect') {
       const pair = new WebSocketPair(); this.state.acceptWebSocket(pair[1]); pair[1].serializeAttachment({ code });
-      pair[1].send(JSON.stringify({ type: 'form-snapshot', ...formSnapshot(row) }));
+      pair[1].send(JSON.stringify({ type: 'form-snapshot', ...snapshot() }));
       await this.publish({ type: 'presence', committee: code, activeEditors: this.active() });
       return new Response(null, { status: 101, webSocket: pair[0] });
     }
     if (path === '/save' && request.method === 'POST') {
-      const form = await request.json(), changes = diff(JSON.parse(row.form_json), form);
-      if (!changes.length) return json(formSnapshot(row));
+      const form = await request.json(), previous = JSON.parse(row.form_json);
+      if ((form.resetEpoch || '') !== system.resetEpoch || (previous.resetEpoch || '') !== system.resetEpoch) return json({ error: 'O comitê foi resetado. Recarregue os dados atuais.', reset: true }, 409);
+      // O histórico é cumulativo: um formulário antigo não pode apagar votações já salvas.
+      const records = new Map((previous.state.voting?.history || []).map(record => [record.id, record]));
+      for (const record of form.state.voting.history) if (!records.has(record.id)) records.set(record.id, record);
+      if (records.size > MAX_VOTATIONS) return json({ error: 'O histórico atingiu o limite de votações deste comitê.' }, 400);
+      form.state.voting.history = [...records.values()].sort((a, b) => a.recordedAt.localeCompare(b.recordedAt));
+      const changes = diff(previous, form);
+      if (!changes.length) return json(snapshot());
       const now = new Date().toISOString(), revision = row.revision + 1;
-      await this.env.DB.batch([
-        this.env.DB.prepare('UPDATE committee_forms SET form_json = ?, revision = ?, updated_at = ? WHERE code = ?').bind(JSON.stringify(form), revision, now, code),
-        this.env.DB.prepare('INSERT INTO committee_events (committee_code, revision, changes_json, created_at) VALUES (?, ?, ?, ?)').bind(code, revision, JSON.stringify(changes), now)
+      const results = await this.env.DB.batch([
+        this.env.DB.prepare("UPDATE committee_forms SET form_json = ?, revision = ?, updated_at = ? WHERE code = ? AND revision = ? AND COALESCE((SELECT json_extract(value, '$.resetEpoch') FROM app_settings WHERE key = 'system'), '') = ?").bind(JSON.stringify(form), revision, now, code, row.revision, form.resetEpoch),
+        this.env.DB.prepare('INSERT INTO committee_events (committee_code, revision, changes_json, created_at) SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM committee_forms WHERE code = ? AND revision = ? AND updated_at = ?)').bind(code, revision, JSON.stringify(changes), now, code, revision, now)
       ]);
-      const saved = { ...form, revision, updatedAt: now, createdAt: row.created_at, activeEditors: this.active() };
+      if (!results[0].meta.changes) return json({ error: 'O comitê foi resetado. Recarregue os dados atuais.', reset: true }, 409);
+      const saved = { ...form, revision, updatedAt: now, createdAt: row.created_at, activeEditors: this.active(), notice: system.crisis };
       const message = { type: 'form-update', ...saved, changes };
       for (const socket of this.state.getWebSockets()) { try { socket.send(JSON.stringify(message)); } catch {} }
       await this.publish(message);
@@ -88,8 +121,9 @@ export class RoomLiveUpdates {
     }
     return json({ error: 'Rota não encontrada.' }, 404);
   }
-  async publish(event) {
-    await this.env.DASHBOARD.get(this.env.DASHBOARD.idFromName('all-committees')).fetch('https://dashboard.internal/update', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(event) });
+  publish(event) {
+    const work = this.env.DASHBOARD.get(this.env.DASHBOARD.idFromName('all-committees')).fetch('https://dashboard.internal/update', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(event) }).catch(error => console.error('Falha ao atualizar acompanhamento:', error.message));
+    this.state.waitUntil?.(work);
   }
   webSocketMessage(socket) { socket.close(1008, 'Esta conexão recebe atualizações apenas.'); }
   async webSocketClose(socket, code, reason) {
@@ -106,6 +140,7 @@ export class GlobalDashboard {
   constructor(state, env) { this.state = state; this.env = env; this.queue = Promise.resolve(); }
   fetch(request) { const work = this.queue.then(() => this.handle(request)); this.queue = work.catch(() => {}); return work; }
   async snapshot() {
+    const system = await systemState(this.env);
     const rows = await this.env.DB.prepare('SELECT * FROM committee_forms').all();
     const presence = await Promise.all(COMMITTEES.map(async committee => {
       const response = await this.env.ROOMS.get(this.env.ROOMS.idFromName(`committee:${committee.code}`)).fetch('https://committee.internal/presence'); return response.json();
@@ -113,15 +148,17 @@ export class GlobalDashboard {
     const history = await this.env.DB.prepare('SELECT committee_code, revision, changes_json, created_at FROM committee_events ORDER BY created_at DESC LIMIT 50').all();
     return {
       type: 'dashboard-snapshot',
+      system,
       committees: COMMITTEES.map((committee, index) => {
         const row = rows.results.find(r => r.code === committee.code);
-        return { ...(row ? formSnapshot(row) : { ...emptyForm(committee.code), revision: 0, updatedAt: null }), name: committee.name, activeEditors: presence[index].activeEditors };
+        return { ...(row ? formSnapshot(row) : { ...emptyForm(committee.code), resetEpoch: system.resetEpoch, revision: 0, updatedAt: null }), name: committee.name, activeEditors: presence[index].activeEditors };
       }),
       recentEvents: history.results.map(event => ({ committee: event.committee_code, revision: event.revision, updatedAt: event.created_at, changes: JSON.parse(event.changes_json) }))
     };
   }
   async handle(request) {
     const path = new URL(request.url).pathname;
+    if (path.startsWith('/control/')) return this.control(path.slice(9), await request.json());
     if (path === '/login-attempt' && request.method === 'POST') {
       const { fingerprint } = await request.json(), key = `login:${fingerprint}`, window = Math.floor(Date.now() / 60000);
       const previous = await this.state.storage.get(key);
@@ -147,12 +184,48 @@ export class GlobalDashboard {
     }
     if (path === '/update' && request.method === 'POST') {
       const event = await request.json();
-      for (const socket of this.state.getWebSockets()) {
-        try { if (socket.deserializeAttachment().expiresAt <= Date.now()) socket.close(1008, 'Sessão expirada.'); else socket.send(JSON.stringify(event)); } catch {}
-      }
+      if (event.type === 'form-update' && (event.resetEpoch || '') !== (await systemState(this.env)).resetEpoch) return json({ ok: true });
+      this.broadcast(event);
       return json({ ok: true });
     }
     return json({ error: 'Rota não encontrada.' }, 404);
+  }
+  broadcast(event) {
+    for (const socket of this.state.getWebSockets()) {
+      try { if (socket.deserializeAttachment().expiresAt <= Date.now()) socket.close(1008, 'Sessão expirada.'); else socket.send(JSON.stringify(event)); } catch {}
+    }
+  }
+  async control(action, body) {
+    await ensureControlSchema(this.env);
+    const system = await systemState(this.env);
+    if (action === 'status') return json({ system, audit: await auditEvents(this.env), committeeCount: COMMITTEES.length, version: '2026-10-dev-crisis' });
+    if (action === 'backup') {
+      const events = await this.env.DB.prepare('SELECT * FROM committee_events ORDER BY created_at, committee_code, revision').all();
+      return json({ version: 1, exportedAt: new Date().toISOString(), dashboard: await this.snapshot(), events: events.results, audit: await auditEvents(this.env) });
+    }
+    if (action === 'start-crisis' || action === 'end-crisis') {
+      if (action === 'start-crisis' && system.crisis) return json({ error: 'A crise já está em andamento. Encerre o aviso no DEV antes de iniciar outra.' }, 409);
+      system.crisis = action === 'start-crisis' ? { id: crypto.randomUUID(), title: body.title, message: body.message, startedAt: new Date().toISOString(), startedBy: body.actor } : null;
+      await this.env.DB.batch([systemStatement(this.env, system), auditStatement(this.env, body.actor, action, { crisis: system.crisis })]);
+      await this.notifyRooms('/notice');
+      this.broadcast({ type: 'crisis-state', notice: system.crisis });
+      return json({ ok: true, system });
+    }
+    if (action === 'reset') {
+      if (body.confirmation !== 'RESETAR TODOS') return json({ error: 'Confirmação inválida.' }, 400);
+      const epoch = crypto.randomUUID(), now = new Date().toISOString(), fresh = { resetEpoch: epoch, crisis: null };
+      const statements = COMMITTEES.map(c => this.env.DB.prepare('INSERT INTO committee_forms (code, form_json, revision, created_at, updated_at) VALUES (?, ?, 1, ?, ?) ON CONFLICT(code) DO UPDATE SET form_json = excluded.form_json, revision = committee_forms.revision + 1, updated_at = excluded.updated_at').bind(c.code, JSON.stringify({ ...emptyForm(c.code), resetEpoch: epoch }), now, now));
+      await this.env.DB.batch([systemStatement(this.env, fresh), ...statements, this.env.DB.prepare('DELETE FROM committee_events'), auditStatement(this.env, body.actor, action, { committees: COMMITTEES.map(c => c.code), resetEpoch: epoch })]);
+      await this.notifyRooms('/invalidate');
+      this.broadcast(await this.snapshot());
+      return json({ ok: true, system: fresh, resetCount: COMMITTEES.length });
+    }
+    return json({ error: 'Ação desconhecida.' }, 404);
+  }
+  async notifyRooms(path) {
+    const results = await Promise.allSettled(COMMITTEES.map(c => this.env.ROOMS.get(this.env.ROOMS.idFromName(`committee:${c.code}`)).fetch(`https://committee.internal${path}`, { method: 'POST', headers: { 'x-committee-code': c.code } })));
+    // O estado persistido também é recebido quando o painel se reconecta ou consulta o servidor.
+    for (const result of results) if (result.status === 'rejected' || !result.value.ok) console.error('Falha ao entregar aviso ao comitê.');
   }
   webSocketMessage(socket) { socket.close(1008, 'Painel somente para acompanhamento.'); }
   webSocketClose(socket, code, reason) { socket.close([1005, 1006, 1015].includes(code) ? 1000 : code, reason); }
@@ -175,10 +248,17 @@ function normalize(body, code) {
   if (!state || !Array.isArray(state.vetoCountries) || state.vetoCountries.some(c => !COUNTRIES.includes(c)) || !Array.isArray(state.delegations)) throw new InputError('Delegações ou veto inválidos.');
   const expected = COUNTRIES.slice(0, committeeByCode(code).countries);
   if (state.delegations.length !== expected.length || expected.some(country => state.delegations.filter(d => d?.country === country).length !== 1)) throw new InputError('Lista de delegações inválida.');
-  return { committee: code, hasVeto: body.hasVeto, crisisTitle: text(body.crisisTitle, 500), crisisDetails: text(body.crisisDetails, 5000), state: { vetoCountries: COUNTRIES.filter(c => state.vetoCountries.includes(c)), delegations: expected.map(country => { const d = state.delegations.find(d => d.country === country); if (!VOTES.has(d.vote)) throw new InputError('Voto inválido.'); return { country, vote: d.vote, comment: text(d.comment, 4000) }; }) } };
+  let voting;
+  try { voting = normalizeVoting(state.voting, code); } catch (error) { throw new InputError(error.message); }
+  return { committee: code, resetEpoch: text(body.resetEpoch, 80), hasVeto: body.hasVeto, crisisTitle: text(body.crisisTitle, 500), crisisDetails: text(body.crisisDetails, 5000), state: { vetoCountries: COUNTRIES.filter(c => state.vetoCountries.includes(c)), voting, delegations: expected.map(country => { const d = state.delegations.find(d => d.country === country); if (!VOTES.has(d.vote)) throw new InputError('Voto inválido.'); return { country, vote: d.vote, comment: text(d.comment, 4000) }; }) } };
 }
 function diff(before, after) {
   const changes = [], labels = { hasVeto: 'Veto', crisisTitle: 'Crise', crisisDetails: 'Detalhamento e resolução' };
+  const previousVoting = before.state.voting || { proposal: '', visualDecision: '', history: [] };
+  const voting = after.state.voting || { proposal: '', visualDecision: '', history: [] };
+  for (const [field, label] of Object.entries({ proposal: 'Proposta em votação', visualDecision: 'Contraste visual' })) if (previousVoting[field] !== voting[field]) changes.push({ field, label, before: previousVoting[field], after: voting[field] });
+  const previousIds = new Set(previousVoting.history.map(record => record.id));
+  for (const record of voting.history) if (!previousIds.has(record.id)) changes.push({ field: 'votation', label: 'Votação registrada', before: '', after: record.proposal + ': ' + (record.result === 'approved' ? 'Aprovada' : 'Recusada') });
   for (const [field, label] of Object.entries(labels)) if (before[field] !== after[field]) changes.push({ field, label, before: before[field], after: after[field] });
   if (JSON.stringify(before.state.vetoCountries) !== JSON.stringify(after.state.vetoCountries)) changes.push({ field: 'vetoCountries', label: 'Países com veto', before: before.state.vetoCountries, after: after.state.vetoCountries });
   for (const d of after.state.delegations) { const previous = before.state.delegations.find(p => p.country === d.country); if (d.comment !== previous.comment) changes.push({ field: 'comment', country: d.country, label: `${d.country}: comentário`, before: previous.comment, after: d.comment }); if (d.vote !== previous.vote) changes.push({ field: 'vote', country: d.country, label: `${d.country}: voto`, before: VOTE_LABELS[previous.vote], after: VOTE_LABELS[d.vote] }); }
@@ -186,4 +266,5 @@ function diff(before, after) {
   return changes.map(c => ({ ...c, before: excerpt(c.before), after: excerpt(c.after) }));
 }
 function wsCredential(request) { return (request.headers.get('Sec-WebSocket-Protocol') || '').split(',').map(s => s.trim()).find(s => s.startsWith('mun-auth.'))?.slice(9); }
+
 

@@ -1,48 +1,30 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="pt-BR">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Acompanhamento geral · MINIONU</title><link rel="stylesheet" href="supervisor.css"></head>
-<body>
-  <section id="login-area" class="login-shell">
-    <p class="eyebrow">MINIONU · SUPERVISÃO</p><h1>Acompanhamento geral</h1><p>Entre para acompanhar os 8 comitês e todas as delegações ao vivo.</p>
-    <form id="login-form" class="login-card"><label>Login<input id="username" autocomplete="username" required maxlength="100"></label><label>Senha<input id="password" type="password" autocomplete="current-password" required maxlength="200"></label><button id="login-button" type="submit">Entrar no painel</button><p id="login-error" class="error-text" role="alert"></p></form>
-    <form id="setup-form" class="login-card" hidden>
-      <h2>Ativar primeiro administrador</h2><p>Confirme a senha administrativa já configurada para ativar seu acesso. Depois você poderá criar os demais usuários no painel.</p>
-      <label>Senha administrativa atual<input id="activation-password" type="password" autocomplete="off" required maxlength="200"></label>
-      <label>Seu nome<input id="setup-name" required maxlength="100" autocomplete="name"></label>
-      <label>Login<input id="setup-username" required minlength="3" maxlength="80" pattern="[A-Za-z0-9._-]+" autocomplete="username"></label>
-      <label>Senha para entrar no painel<input id="setup-password" type="password" required minlength="12" maxlength="200" autocomplete="new-password"></label>
-      <label>Confirmar senha<input id="setup-confirm" type="password" required minlength="12" maxlength="200" autocomplete="new-password"></label>
-      <button type="submit">Ativar e entrar</button><p id="setup-error" class="error-text" role="alert"></p>
-    </form>
-    <a href="index.html">Abrir formulário de comitê</a>
-  </section>
-  <main id="panel" class="wrap" hidden>
-    <header><div><p class="eyebrow">MINIONU</p><h1>Acompanhamento geral</h1><p>Todos os comitês e delegações na mesma tela.</p></div><div class="header-controls"><span id="status" class="status" role="status">Conectando…</span><button id="users-toggle" class="secondary" aria-expanded="false" aria-controls="users-area">Gerenciar usuários</button><button id="logout" class="secondary">Sair</button></div></header>
-    <section id="users-area" class="events-card users-area" hidden>
-      <h2>Usuários do painel</h2><p>Todos os usuários têm acesso de supervisão. Cadastros e alterações são salvos imediatamente.</p>
-      <form id="create-user-form" class="user-form">
-        <label>Nome<input id="new-user-name" required maxlength="100" autocomplete="off"></label>
-        <label>Login<input id="new-user-login" required minlength="3" maxlength="80" pattern="[A-Za-z0-9._-]+" autocomplete="off"></label>
-        <label>Senha <small>(mínimo de 12 caracteres)</small><input id="new-user-password" type="password" required minlength="12" maxlength="200" autocomplete="new-password"></label>
-        <label>Confirmar senha<input id="new-user-confirm" type="password" required minlength="12" maxlength="200" autocomplete="new-password"></label>
-        <button type="submit">Criar usuário</button>
-      </form>
-      <p id="users-message" role="status" aria-live="polite"></p>
-      <div class="table-scroll"><table class="users-table"><thead><tr><th>Nome e login</th><th>Estado</th><th>Ações</th></tr></thead><tbody id="users-list"></tbody></table></div>
-      <button id="users-more" class="secondary" hidden>Carregar mais usuários</button>
-    </section>
-    <section class="summary"><div><strong id="committee-count">8</strong><span>Comitês</span></div><div><strong id="online-count">0</strong><span>Comitês com formulário aberto</span></div><div><strong id="delegation-count">0</strong><span>Delegações acompanhadas</span></div></section>
-    <nav id="overview" class="overview" aria-label="Visão geral dos comitês"></nav>
-    <section id="committee-grid" class="committee-grid" aria-label="Todos os comitês e delegações"></section>
-    <section class="events-card"><h2>Últimas alterações · todos os comitês</h2><p>Comitê, delegação e campo alterado identificados em cada aviso.</p><div id="events"></div></section>
-  </main>
-  <dialog id="password-dialog"><form id="reset-password-form" class="login-card">
-    <h2>Alterar senha</h2><p id="password-dialog-user"></p>
-    <label>Nova senha<input id="reset-password" type="password" minlength="12" maxlength="200" required autocomplete="new-password"></label>
-    <label>Confirmar senha<input id="reset-confirm" type="password" minlength="12" maxlength="200" required autocomplete="new-password"></label>
-    <p id="reset-error" class="error-text" role="alert"></p><div class="dialog-actions"><button type="button" id="password-cancel" class="secondary">Cancelar</button><button type="submit">Salvar senha</button></div>
-  </form></dialog>
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MiniONU Piedade · Acompanhamento geral</title><meta name="theme-color" content="#103778">
+  <link rel="icon" href="assets/minionu-piedade.png"><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="supervisor.css">
+  <script src="loading.js" defer></script>
+</head>
+<body class="is-loading">
+  <div id="loading-screen" class="loading-screen" role="status" aria-label="Carregando MiniONU Piedade"><img src="assets/minionu-piedade.png" alt="MiniONU Piedade" width="192" height="192"><span class="loading-line" aria-hidden="true"></span></div>
+  <noscript><style>.loading-screen{display:none}body.is-loading{overflow:auto}</style><p>Ative o JavaScript para acessar o acompanhamento.</p></noscript>
+  <div id="app-content">
+    <header class="cabecalho"><div class="header-inner"><a class="brand" href="supervisor.html"><img class="brand-logo" src="assets/minionu-piedade.png" alt="Logo MiniONU Piedade" width="88" height="88"><div class="brand-name"><h1 class="titulo">MiniONU</h1><span>Piedade</span></div></a><div class="header-caption">Colégio Nossa Senhora da Piedade<span>Acompanhamento geral</span></div></div></header>
+    <main id="login-area" class="login-shell">
+      <p class="eyebrow">Acompanhamento geral</p><h2>Todos os comitês, ao vivo</h2><p>Entre com seu login para acompanhar as informações e comunicar o início da crise.</p>
+      <form id="login-form" class="login-card panel"><label>Login<input id="username" required autocomplete="username" maxlength="80"></label><label>Senha<input id="password" type="password" required autocomplete="current-password" maxlength="200"></label><button id="login-button" type="submit">Entrar no acompanhamento</button><p id="login-error" class="error-text" role="alert"></p></form>
+    </main>
+    <main id="panel" class="page-shell" hidden>
+      <div class="page-heading"><div><p class="eyebrow">Visão geral · MiniONU Piedade</p><h2>Acompanhamento dos comitês</h2></div><div class="header-controls"><span id="status" class="status" role="status">Conectando…</span><a id="dev-link" href="dev.html" class="secondary button-link" hidden>Painel DEV</a><button id="logout" type="button" class="secondary">Sair</button></div></div>
+      <section class="summary" aria-label="Resumo"><div><strong id="committee-count">8</strong><span>Comitês</span></div><div><strong id="online-count">0</strong><span>Comitês com diretores conectados</span></div><div><strong id="delegation-count">0</strong><span>Delegações</span></div></section>
+      <nav id="overview" class="overview" aria-label="Navegação entre comitês"></nav>
+      <section id="committee-grid" class="committee-grid" aria-label="Informações dos comitês"></section>
+      <section class="panel events-card"><div class="section-heading"><span class="section-number">↻</span><h2>Últimas atualizações</h2></div><div id="events" aria-live="polite"></div></section>
+      <section class="panel crisis-control" aria-labelledby="crisis-control-title"><div class="section-heading"><span class="section-number">!</span><h2 id="crisis-control-title">Início da crise</h2></div><p>Envie um comunicado a todos os diretores. O aviso aparecerá nos painéis de comitê, inclusive para quem entrar depois.</p><form id="start-crisis-form"><label>Título do comunicado<input id="notice-title" maxlength="500" value="A crise começou" required></label><label>Mensagem aos diretores<textarea id="notice-message" maxlength="2000" rows="3" required>A crise foi iniciada. Acompanhe as orientações e registre os acontecimentos do seu comitê.</textarea></label><button id="start-crisis" type="submit">Iniciar crise</button><p id="crisis-status" role="status"></p></form></section>
+      <footer class="page-footer"><span>MiniONU <b>Piedade</b></span><span>Diálogo, cooperação e novas perspectivas.</span></footer>
+    </main>
+  </div>
   <script type="module" src="supervisor.js"></script>
 </body>
 </html>
-

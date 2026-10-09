@@ -19,7 +19,8 @@ jobs:
       - name: Prepare static frontend
         run: |
           mkdir _site
-          cp index.html script.js style.css live.css live-integration.js config.js client.js committees.js supervisor.html supervisor.js supervisor.css _site/
+          cp index.html script.js voting.js storage.js loading.js style.css live.css live-integration.js config.js client.js committees.js supervisor.html supervisor.js supervisor.css dev.html dev.js admin-auth.js _site/
+          cp -r assets _site/
           touch _site/.nojekyll
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
@@ -28,3 +29,4 @@ jobs:
       - name: Deploy
         id: deployment
         uses: actions/deploy-pages@v4
+

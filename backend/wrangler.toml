@@ -26,5 +26,7 @@ tag = "v2"
 new_sqlite_classes = ["GlobalDashboard"]
 
 [vars]
+DEV_USER = "galaobiel"
 ALLOWED_ORIGINS = "https://galaobiel4.github.io,http://localhost:5500,http://127.0.0.1:5500"
+
 
