@@ -20,9 +20,8 @@
       <section class="summary" aria-label="Resumo"><div><strong id="committee-count">8</strong><span>Comitês</span></div><div><strong id="online-count">0</strong><span>Comitês com diretores conectados</span></div><div><strong id="delegation-count">0</strong><span>Delegações</span></div></section>
       <nav id="overview" class="overview" aria-label="Navegação entre comitês"></nav>
       <section id="committee-grid" class="committee-grid" aria-label="Informações dos comitês"></section>
-      <section class="panel events-card"><div class="section-heading"><span class="section-number">↻</span><h2>Últimas atualizações</h2></div><div id="events" aria-live="polite"></div></section>
       <section class="panel crisis-control" aria-labelledby="crisis-control-title"><div class="section-heading"><span class="section-number">!</span><h2 id="crisis-control-title">Início da crise</h2></div><p>Envie um comunicado a todos os diretores. O aviso aparecerá nos painéis de comitê, inclusive para quem entrar depois.</p><form id="start-crisis-form"><label>Título do comunicado<input id="notice-title" maxlength="500" value="A crise começou" required></label><label>Mensagem aos diretores<textarea id="notice-message" maxlength="2000" rows="3" required>A crise foi iniciada. Acompanhe as orientações e registre os acontecimentos do seu comitê.</textarea></label><button id="start-crisis" type="submit">Iniciar crise</button><p id="crisis-status" role="status"></p></form></section>
-      <footer class="page-footer"><span>MiniONU <b>Piedade</b></span><span>Diálogo, cooperação e novas perspectivas.</span></footer>
+      <footer class="page-footer"><span>MiniONU <b>Piedade</b></span><span id="last-update" role="status">Aguardando atualização</span></footer>
     </main>
   </div>
   <script type="module" src="supervisor.js"></script>

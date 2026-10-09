@@ -59,6 +59,12 @@ test('migra rascunho antigo sem perder dados e limpa apenas a chave antiga', () 
   store.save('CDH', restored.form);
   assert.equal(storage.getItem('minionu-draft.CDH'), null);
   assert.equal(store.read('CDH').form.crisisTitle, 'Rascunho antigo');
+  const oldCSNU = emptyForm('CSNU'); oldCSNU.state.delegations.pop(); oldCSNU.state.delegations[1].comment = 'Comentário anterior';
+  storage.setItem('minionu-draft.CSNU', JSON.stringify(oldCSNU));
+  const csnu = store.read('CSNU').form;
+  assert.equal(csnu.state.delegations.length, 10);
+  assert.equal(csnu.state.delegations[1].comment, 'Comentário anterior');
+  assert.deepEqual(csnu.state.delegations[9], { country: 'Reino Unido', vote: '', comment: '' });
 });
 test('JSON inválido e cópia de outro comitê não quebram a página', () => {
   const storage = memoryStorage(), store = createFormStore(storage);

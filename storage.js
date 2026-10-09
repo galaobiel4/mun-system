@@ -10,9 +10,10 @@ function validateForm(form, code) {
   const state = form.state;
   if (!state || !Array.isArray(state.vetoCountries) || state.vetoCountries.some(country => !COUNTRIES.includes(country)) || !Array.isArray(state.delegations)) return null;
   const expected = COUNTRIES.slice(0, committee.countries);
-  if (state.delegations.length !== expected.length || expected.some(country => state.delegations.filter(d => d?.country === country).length !== 1)) return null;
+  const storedCountries = code === 'CSNU' && state.delegations.length === 9 ? COUNTRIES.slice(0, 9) : expected;
+  if (state.delegations.length !== storedCountries.length || storedCountries.some(country => state.delegations.filter(d => d?.country === country).length !== 1)) return null;
   const delegations = expected.map(country => {
-    const delegation = state.delegations.find(d => d.country === country);
+    const delegation = state.delegations.find(d => d.country === country) || { country, vote: '', comment: '' };
     if (!['', 'favoravel', 'abstido', 'contra'].includes(delegation.vote) || typeof delegation.comment !== 'string' || delegation.comment.length > 4000) throw new Error('Dados locais inválidos.');
     return { country, vote: delegation.vote, comment: delegation.comment };
   });

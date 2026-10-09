@@ -6,7 +6,6 @@ const votes = { '': ['Sem voto', ''], favoravel: ['Favorável', 'yes'], abstido:
 let stop, poll, models = new Map(), auth;
 const node = (tag, text, cls) => { const el = document.createElement(tag); if (text !== undefined) el.textContent = text; if (cls) el.className = cls; return el; };
 function status(message, cls = '') { $('status').textContent = message; $('status').className = `status ${cls}`; }
-function format(value) { if (Array.isArray(value)) return value.join(', ') || 'Nenhum'; if (typeof value === 'boolean') return value ? 'Sim' : 'Não'; return value || 'Vazio'; }
 function count(form) { const result = { favoravel: 0, abstido: 0, contra: 0, '': 0 }; for (const d of form.state.delegations) result[d.vote]++; return result; }
 function renderOverview() {
   $('overview').replaceChildren(); let online = 0, delegates = 0;
@@ -18,7 +17,7 @@ function renderOverview() {
   }
   $('committee-count').textContent = COMMITTEES.length; $('online-count').textContent = online; $('delegation-count').textContent = delegates;
 }
-function renderCommittee(form, changes = []) {
+function renderCommittee(form) {
   let card = $(`committee-${form.committee}`);
   if (!card) { card = node('article', undefined, 'committee-card panel'); card.id = `committee-${form.committee}`; $('committee-grid').append(card); }
   card.replaceChildren(); const header = node('div', undefined, 'committee-header');
@@ -29,28 +28,30 @@ function renderCommittee(form, changes = []) {
   card.append(node('div', form.hasVeto ? `Veto: sim · ${(form.state.vetoCountries || []).join(', ') || 'Nenhum país selecionado'}` : 'Veto: não', 'veto'));
   const counts = count(form), totals = node('div', undefined, 'totals'); for (const [vote, [label, cls]] of Object.entries(votes)) totals.append(node('span', `${counts[vote]} ${label}`, cls)); card.append(totals);
   const table = node('table'), head = node('thead'), labels = node('tr'); for (const title of ['Delegação', 'Voto', 'Comentário']) labels.append(node('th', title)); head.append(labels); table.append(head); const body = node('tbody');
-  for (const d of form.state.delegations) { const row = node('tr', undefined, changes.some(c => c.country === d.country) ? 'changed' : ''); const vote = node('td'); vote.append(node('span', votes[d.vote][0], `vote ${votes[d.vote][1]}`)); row.append(node('td', d.country), vote, node('td', d.comment || '—')); body.append(row); }
+  for (const d of form.state.delegations) { const row = node('tr'); const vote = node('td'); vote.append(node('span', votes[d.vote][0], `vote ${votes[d.vote][1]}`)); row.append(node('td', d.country), vote, node('td', d.comment || '—')); body.append(row); }
   table.append(body); const scroll = node('div', undefined, 'table-scroll'); scroll.append(table); card.append(scroll);
   const history = form.state.voting?.history || [], voting = node('details', undefined, 'committee-voting'); voting.append(node('summary', `Votações registradas · ${history.length}`));
   if (form.state.voting?.proposal) voting.append(node('p', `Em votação: ${form.state.voting.proposal}`));
   for (const record of [...history].reverse()) { const item = node('div', undefined, 'vote-record'); item.append(node('strong', record.proposal), node('span', `${record.result === 'approved' ? 'Aprovada' : 'Recusada'} · ${record.method === 'visual' ? 'Contraste visual' : 'Votos das delegações'}`, record.result === 'approved' ? 'yes' : 'no')); voting.append(item); }
   if (!history.length) voting.append(node('p', 'Nenhuma votação registrada.')); card.append(voting);
-  card.append(node('p', form.updatedAt ? `Última atualização: ${new Date(form.updatedAt).toLocaleTimeString('pt-BR')}` : 'Aguardando abertura do formulário', 'meta'));
   const link = node('a', 'Abrir formulário deste comitê', 'form-link'); link.href = `index.html?comite=${encodeURIComponent(form.committee)}`; link.target = '_blank'; link.rel = 'noopener'; card.append(link);
 }
-function eventCard(event) { const card = node('article', undefined, 'event'); card.dataset.event = `${event.committee}-${event.revision}`; card.append(node('time', new Date(event.updatedAt).toLocaleString('pt-BR')), node('h3', event.committee)); for (const change of event.changes) card.append(node('p', `${change.label}: ${format(change.before)} → ${format(change.after)}`)); return card; }
+function renderLastUpdate() {
+  const times = [...models.values()].map(form => Date.parse(form.updatedAt)).filter(Number.isFinite);
+  $('last-update').textContent = times.length ? `Última atualização: ${new Date(Math.max(...times)).toLocaleTimeString('pt-BR')}` : 'Aguardando atualização';
+}
 function crisisState(notice) { $('start-crisis').disabled = Boolean(notice); $('start-crisis').textContent = notice ? 'Crise em andamento' : 'Iniciar crise'; $('crisis-status').textContent = notice ? `Aviso enviado: ${notice.title} · ${new Date(notice.startedAt).toLocaleString('pt-BR')}` : ''; }
 function consume(update) {
   if (update.type === 'crisis-state') { crisisState(update.notice); return; }
-  if (update.type === 'dashboard-snapshot') { models = new Map(update.committees.map(form => [form.committee, form])); $('committee-grid').replaceChildren(); for (const form of update.committees) renderCommittee(form); $('events').replaceChildren(...update.recentEvents.map(eventCard)); crisisState(update.system?.crisis); }
+  if (update.type === 'dashboard-snapshot') { models = new Map(update.committees.map(form => [form.committee, form])); $('committee-grid').replaceChildren(); for (const form of update.committees) renderCommittee(form); crisisState(update.system?.crisis); }
   else { const previous = models.get(update.committee); if (!previous) return;
     if (update.type === 'presence') { previous.activeEditors = update.activeEditors; renderCommittee(previous); }
-    if (update.type === 'form-update' && update.revision >= previous.revision) { const form = { ...previous, ...update }; models.set(update.committee, form); renderCommittee(form, update.changes); if (!$('events').querySelector(`[data-event="${update.committee}-${update.revision}"]`)) { $('events').querySelector('.empty')?.remove(); $('events').prepend(eventCard(update)); } }
+    if (update.type === 'form-update' && update.revision >= previous.revision) { const form = { ...previous, ...update }; models.set(update.committee, form); renderCommittee(form); }
   }
-  renderOverview(); while ($('events').children.length > 50) $('events').lastElementChild.remove(); if (!$('events').children.length) $('events').append(node('p', 'Nenhuma alteração recebida ainda.', 'empty'));
+  renderOverview(); renderLastUpdate();
 }
 auth = await initAdminAuth({
-  onLogout() { stop?.(); clearInterval(poll); models.clear(); $('committee-grid').replaceChildren(); $('overview').replaceChildren(); $('events').replaceChildren(); },
+  onLogout() { stop?.(); clearInterval(poll); models.clear(); $('committee-grid').replaceChildren(); $('overview').replaceChildren(); renderLastUpdate(); },
   async onEnter(session, isCurrent) {
     const snapshot = await loadDashboard(session.token); if (!isCurrent()) return; consume(snapshot); $('dev-link').hidden = session.user.role !== 'dev';
     stop = watchDashboard(session.token, update => { if (isCurrent()) consume(update); }, (state, error) => { if (!isCurrent()) return; if (state === 'expired') { session.logout('Sessão expirada. Entre novamente.'); return; } const labels = { connected: 'Ao vivo · todos os comitês', connecting: 'Conectando…', reconnecting: 'Reconectando…', error: error || 'Sem conexão' }; status(labels[state], state === 'connected' ? 'live' : state === 'error' ? 'error' : ''); });

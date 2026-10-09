@@ -15,7 +15,7 @@ export default {
     const cors = allowed ? { 'access-control-allow-origin': origin, 'access-control-allow-methods': 'GET, PUT, POST, OPTIONS', 'access-control-allow-headers': 'Content-Type, Authorization', vary: 'Origin' } : {};
     const respond = (data, status = 200) => json(data, status, cors);
     const url = new URL(request.url);
-    if (url.pathname === '/api/health') return respond({ ok: true, version: '2026-10-dev-crisis' });
+    if (url.pathname === '/api/health') return respond({ ok: true, version: '2026-10-veto-imediato' });
     if (request.method === 'OPTIONS') return new Response(null, { status: allowed ? 204 : 403, headers: cors });
     if (!allowed) return respond({ error: 'Origem não autorizada.' }, 403);
     try {
@@ -99,10 +99,19 @@ export class RoomLiveUpdates {
     }
     if (path === '/save' && request.method === 'POST') {
       const form = await request.json(), previous = JSON.parse(row.form_json);
+      if (form.legacyCSNU) {
+        // Um navegador com a versão antiga não pode limpar os dados da nova delegação.
+        const storedUK = previous.state.delegations.find(d => d.country === 'Reino Unido');
+        if (storedUK) form.state.delegations[form.state.delegations.findIndex(d => d.country === 'Reino Unido')] = storedUK;
+      }
+      delete form.legacyCSNU;
       if ((form.resetEpoch || '') !== system.resetEpoch || (previous.resetEpoch || '') !== system.resetEpoch) return json({ error: 'O comitê foi resetado. Recarregue os dados atuais.', reset: true }, 409);
       // O histórico é cumulativo: um formulário antigo não pode apagar votações já salvas.
       const records = new Map((previous.state.voting?.history || []).map(record => [record.id, record]));
-      for (const record of form.state.voting.history) if (!records.has(record.id)) records.set(record.id, record);
+      for (const record of form.state.voting.history) if (!records.has(record.id)) {
+        if (code === 'CSNU' && record.votes.length !== committeeByCode(code).countries) return json({ error: 'Atualize a página do CSNU para incluir o Reino Unido antes de registrar uma nova votação.' }, 400);
+        records.set(record.id, record);
+      }
       if (records.size > MAX_VOTATIONS) return json({ error: 'O histórico atingiu o limite de votações deste comitê.' }, 400);
       form.state.voting.history = [...records.values()].sort((a, b) => a.recordedAt.localeCompare(b.recordedAt));
       const changes = diff(previous, form);
@@ -198,7 +207,7 @@ export class GlobalDashboard {
   async control(action, body) {
     await ensureControlSchema(this.env);
     const system = await systemState(this.env);
-    if (action === 'status') return json({ system, audit: await auditEvents(this.env), committeeCount: COMMITTEES.length, version: '2026-10-dev-crisis' });
+    if (action === 'status') return json({ system, audit: await auditEvents(this.env), committeeCount: COMMITTEES.length, version: '2026-10-veto-imediato' });
     if (action === 'backup') {
       const events = await this.env.DB.prepare('SELECT * FROM committee_events ORDER BY created_at, committee_code, revision').all();
       return json({ version: 1, exportedAt: new Date().toISOString(), dashboard: await this.snapshot(), events: events.results, audit: await auditEvents(this.env) });
@@ -232,7 +241,11 @@ export class GlobalDashboard {
   webSocketError(socket) { socket.close(1011, 'Erro de conexão.'); }
 }
 
-function formSnapshot(row) { return { ...JSON.parse(row.form_json), revision: row.revision, createdAt: row.created_at, updatedAt: row.updated_at }; }
+function formSnapshot(row) {
+  const form = JSON.parse(row.form_json);
+  if (form.committee === 'CSNU' && !form.state.delegations.some(d => d.country === 'Reino Unido')) form.state.delegations.push({ country: 'Reino Unido', vote: '', comment: '' });
+  return { ...form, revision: row.revision, createdAt: row.created_at, updatedAt: row.updated_at };
+}
 async function readJson(request) {
   if (!request.headers.get('content-type')?.includes('application/json')) throw new InputError('Envie JSON.');
   const reader = request.body?.getReader(); if (!reader) throw new InputError('Envie os dados.');
@@ -247,10 +260,12 @@ function normalize(body, code) {
   const state = body.state;
   if (!state || !Array.isArray(state.vetoCountries) || state.vetoCountries.some(c => !COUNTRIES.includes(c)) || !Array.isArray(state.delegations)) throw new InputError('Delegações ou veto inválidos.');
   const expected = COUNTRIES.slice(0, committeeByCode(code).countries);
-  if (state.delegations.length !== expected.length || expected.some(country => state.delegations.filter(d => d?.country === country).length !== 1)) throw new InputError('Lista de delegações inválida.');
+  const legacyCSNU = code === 'CSNU' && state.delegations.length === 9;
+  const submittedCountries = legacyCSNU ? COUNTRIES.slice(0, 9) : expected;
+  if (state.delegations.length !== submittedCountries.length || submittedCountries.some(country => state.delegations.filter(d => d?.country === country).length !== 1)) throw new InputError('Lista de delegações inválida.');
   let voting;
   try { voting = normalizeVoting(state.voting, code); } catch (error) { throw new InputError(error.message); }
-  return { committee: code, resetEpoch: text(body.resetEpoch, 80), hasVeto: body.hasVeto, crisisTitle: text(body.crisisTitle, 500), crisisDetails: text(body.crisisDetails, 5000), state: { vetoCountries: COUNTRIES.filter(c => state.vetoCountries.includes(c)), voting, delegations: expected.map(country => { const d = state.delegations.find(d => d.country === country); if (!VOTES.has(d.vote)) throw new InputError('Voto inválido.'); return { country, vote: d.vote, comment: text(d.comment, 4000) }; }) } };
+  return { committee: code, ...(legacyCSNU ? { legacyCSNU: true } : {}), resetEpoch: text(body.resetEpoch, 80), hasVeto: body.hasVeto, crisisTitle: text(body.crisisTitle, 500), crisisDetails: text(body.crisisDetails, 5000), state: { vetoCountries: COUNTRIES.filter(c => state.vetoCountries.includes(c)), voting, delegations: expected.map(country => { const d = state.delegations.find(d => d.country === country) || { vote: '', comment: '' }; if (!VOTES.has(d.vote)) throw new InputError('Voto inválido.'); return { country, vote: d.vote, comment: text(d.comment, 4000) }; }) } };
 }
 function diff(before, after) {
   const changes = [], labels = { hasVeto: 'Veto', crisisTitle: 'Crise', crisisDetails: 'Detalhamento e resolução' };
@@ -261,7 +276,7 @@ function diff(before, after) {
   for (const record of voting.history) if (!previousIds.has(record.id)) changes.push({ field: 'votation', label: 'Votação registrada', before: '', after: record.proposal + ': ' + (record.result === 'approved' ? 'Aprovada' : 'Recusada') });
   for (const [field, label] of Object.entries(labels)) if (before[field] !== after[field]) changes.push({ field, label, before: before[field], after: after[field] });
   if (JSON.stringify(before.state.vetoCountries) !== JSON.stringify(after.state.vetoCountries)) changes.push({ field: 'vetoCountries', label: 'Países com veto', before: before.state.vetoCountries, after: after.state.vetoCountries });
-  for (const d of after.state.delegations) { const previous = before.state.delegations.find(p => p.country === d.country); if (d.comment !== previous.comment) changes.push({ field: 'comment', country: d.country, label: `${d.country}: comentário`, before: previous.comment, after: d.comment }); if (d.vote !== previous.vote) changes.push({ field: 'vote', country: d.country, label: `${d.country}: voto`, before: VOTE_LABELS[previous.vote], after: VOTE_LABELS[d.vote] }); }
+  for (const d of after.state.delegations) { const previous = before.state.delegations.find(p => p.country === d.country) || { comment: '', vote: '' }; if (d.comment !== previous.comment) changes.push({ field: 'comment', country: d.country, label: `${d.country}: comentário`, before: previous.comment, after: d.comment }); if (d.vote !== previous.vote) changes.push({ field: 'vote', country: d.country, label: `${d.country}: voto`, before: VOTE_LABELS[previous.vote], after: VOTE_LABELS[d.vote] }); }
   const excerpt = value => typeof value === 'string' && value.length > 200 ? `${value.slice(0, 200)}…` : value;
   return changes.map(c => ({ ...c, before: excerpt(c.before), after: excerpt(c.after) }));
 }

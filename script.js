@@ -39,16 +39,18 @@ function refresh() {
   else {
     const counts = result.tally;
     message += ': ' + countLabel(counts.favoravel, 'favorável', 'favoráveis') + ', ' + countLabel(counts.contra, 'contrário', 'contrários') + ' e ' + countLabel(counts.abstido, 'abstenção', 'abstenções') + '.';
-    if (counts.unmarked) message += counts.unmarked === 1 ? ' Falta 1 país.' : ' Faltam ' + counts.unmarked + ' países.';
-    else if (result.vetoes.length) message += ' Veto: ' + result.vetoes.join(', ') + '.';
-    message += ' Mínimo: ' + countLabel(result.required, 'favorável', 'favoráveis') + '.';
+    if (result.vetoes.length) message += ' Veto: ' + result.vetoes.join(', ') + '. A proposta foi recusada imediatamente; os votos restantes não são necessários.';
+    else {
+      if (counts.unmarked) message += counts.unmarked === 1 ? ' Falta 1 país.' : ' Faltam ' + counts.unmarked + ' países.';
+      message += ' Mínimo: ' + countLabel(result.required, 'favorável', 'favoráveis') + '.';
+    }
   }
   summary.textContent = message;
   document.getElementById('register-vote').disabled = result.result === 'pending' || !readVoting().proposal.trim() || history.length >= MAX_VOTATIONS;
   const rule = document.getElementById('vote-rule');
   const committee = committeeByCode(activeCode);
   rule.textContent = activeCode === 'CSNU'
-    ? 'Maioria de 3/5 do total de delegações. Um voto contrário de país com veto impede a aprovação; abstenção não é veto.'
+    ? 'Maioria de 3/5 do total de delegações. Um voto contrário de país com veto recusa a proposta imediatamente, inclusive com votos pendentes ou contraste visual; abstenção não é veto.'
     : (committee.majority === '2/3' ? 'Maioria de 2/3' : 'Maioria simples') + ' dos votos favoráveis e contrários. Abstenções ficam fora da base de cálculo.';
 }
 function addText(parent, tag, text) {

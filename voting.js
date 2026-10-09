@@ -25,14 +25,16 @@ export function normalizeVoting(value, code) {
     if (!proposal) throw new Error('Informe a proposta votada.');
     if (typeof record.recordedAt !== 'string' || record.recordedAt.length > 40 || !Number.isFinite(Date.parse(record.recordedAt))) throw new Error('Data da votação inválida.');
     if (typeof record.hasVeto !== 'boolean' || !Array.isArray(record.vetoCountries) || record.vetoCountries.some(country => !COUNTRIES.includes(country))) throw new Error('Configuração de veto inválida.');
-    if (!Array.isArray(record.votes) || record.votes.length !== countries.length || countries.some(country => record.votes.filter(vote => vote?.country === country).length !== 1)) throw new Error('Lista de votos inválida.');
-    const votes = countries.map(country => {
+    // Os registros anteriores à inclusão do Reino Unido preservam sua composição original.
+    const recordCountries = code === 'CSNU' && Array.isArray(record.votes) && record.votes.length === 9 ? COUNTRIES.slice(0, 9) : countries;
+    if (!Array.isArray(record.votes) || record.votes.length !== recordCountries.length || recordCountries.some(country => record.votes.filter(vote => vote?.country === country).length !== 1)) throw new Error('Lista de votos inválida.');
+    const votes = recordCountries.map(country => {
       const vote = record.votes.find(vote => vote.country === country).vote;
       if (!Object.hasOwn(VOTE_LABELS, vote)) throw new Error('Voto inválido.');
       return { country, vote };
     });
     const configuration = { hasVeto: record.hasVeto, vetoCountries: COUNTRIES.filter(country => record.vetoCountries.includes(country)), visualDecision: visual(record.visualDecision) };
-    const outcome = calculateVote(code, votes, configuration);
+    const outcome = calculateForCountries(code, votes, configuration, recordCountries);
     if (outcome.result === 'pending') throw new Error('Complete os votos ou escolha o contraste visual antes de registrar.');
     return { id: record.id, recordedAt: new Date(record.recordedAt).toISOString(), proposal, votes, ...configuration, ...outcome };
   });
@@ -40,9 +42,11 @@ export function normalizeVoting(value, code) {
 }
 
 export function calculateVote(code, votes, options = {}) {
+  return calculateForCountries(code, votes, options, COUNTRIES.slice(0, committeeByCode(code)?.countries));
+}
+function calculateForCountries(code, votes, options, countries) {
   const committee = committeeByCode(code);
   if (!committee) throw new Error('Comitê inválido.');
-  const countries = COUNTRIES.slice(0, committee.countries);
   const tally = { favoravel: 0, abstido: 0, contra: 0, unmarked: 0 };
   for (const country of countries) {
     const value = votes.find(vote => vote.country === country)?.vote;
@@ -59,11 +63,12 @@ export function calculateVote(code, votes, options = {}) {
   const vetoes = options.hasVeto
     ? votes.filter(vote => countries.includes(vote.country) && options.vetoCountries?.includes(vote.country) && vote.vote === 'contra').map(vote => vote.country)
     : [];
+  // O veto recusa a proposta imediatamente, mesmo com votos pendentes ou contraste visual.
+  if (vetoes.length) return { result: 'rejected', method: 'countries', majority, required, basis, tally, vetoes };
   if (options.visualDecision === 'approved' || options.visualDecision === 'rejected') {
     return { result: options.visualDecision, method: 'visual', majority, required, basis, tally, vetoes: [] };
   }
   const result = tally.unmarked ? 'pending'
-    : vetoes.length ? 'rejected'
     : tally.favoravel >= required ? 'approved' : 'rejected';
   return { result, method: 'countries', majority, required, basis, tally, vetoes };
 }

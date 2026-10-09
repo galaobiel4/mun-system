@@ -24,11 +24,11 @@ test('2/3 usa votos afirmativos e negativos, com arredondamento para cima', () =
   assert.equal(calculateVote('OMS', votes(0, 0, 9)).result, 'rejected');
 });
 test('CSNU exige 3/5 de todos os membros, não só dos votantes', () => {
-  assert.equal(calculateVote('CSNU', votes(5, 0, 4)).result, 'rejected');
-  assert.equal(calculateVote('CSNU', votes(6, 0, 3)).result, 'approved');
+  assert.equal(calculateVote('CSNU', votes(5, 0, 5)).result, 'rejected');
+  assert.equal(calculateVote('CSNU', votes(6, 0, 4)).result, 'approved');
 });
 test('veto bloqueia maioria; abstenção de membro com veto permite aprovação', () => {
-  const ballot = votes(7, 0, 2);
+  const ballot = votes(8, 0, 2);
   ballot[1].vote = 'contra';
   assert.equal(calculateVote('CSNU', ballot, { hasVeto: true, vetoCountries: ['Rússia'] }).result, 'rejected');
   ballot[1].vote = 'abstido';
@@ -44,10 +44,36 @@ test('votos não marcados ficam pendentes; contraste decide sem votos individuai
     assert.equal(outcome.method, 'visual');
   }
 });
-test('contraste visual também prevalece sobre votos individuais previamente marcados', () => {
+test('veto tem prioridade sobre aprovação por contraste visual', () => {
   const outcome = calculateVote('CSNU', votes(0, 9, 0), { visualDecision: 'approved', hasVeto: true, vetoCountries: ['Rússia'] });
-  assert.equal(outcome.result, 'approved');
-  assert.deepEqual(outcome.vetoes, []);
+  assert.equal(outcome.result, 'rejected');
+  assert.deepEqual(outcome.vetoes, ['Rússia']);
+});
+test('um voto de veto recusa imediatamente e permite registro com países ainda não marcados', () => {
+  for (const country of ['EUA', 'Rússia', 'China', 'França', 'Reino Unido']) {
+    const ballot = votes(0, 0, 0, 10);
+    ballot.find(vote => vote.country === country).vote = 'contra';
+    const configuration = { hasVeto: true, vetoCountries: [country] };
+    const outcome = calculateVote('CSNU', ballot, configuration);
+    assert.equal(outcome.result, 'rejected');
+    assert.equal(outcome.tally.unmarked, 9);
+    assert.deepEqual(outcome.vetoes, [country]);
+    const normalized = normalizeVoting({ proposal: '', visualDecision: '', history: [record(ballot, '', configuration)] }, 'CSNU');
+    assert.equal(normalized.history[0].result, 'rejected');
+  }
+});
+test('histórico antigo do CSNU conserva os nove votos anteriores à inclusão do Reino Unido', () => {
+  const old = record(votes(6, 0, 3), '', { hasVeto: true, vetoCountries: ['Rússia'] });
+  const normalized = normalizeVoting({ proposal: '', visualDecision: '', history: [old] }, 'CSNU');
+  assert.equal(normalized.history[0].votes.length, 9);
+  assert.equal(normalized.history[0].result, 'approved');
+});
+test('abstenção ou voto contrário sem veto continuam aguardando os demais países', () => {
+  const ballot = votes(0, 0, 0, 9);
+  ballot[1].vote = 'abstido';
+  assert.equal(calculateVote('CSNU', ballot, { hasVeto: true, vetoCountries: ['Rússia'] }).result, 'pending');
+  ballot[0].vote = 'contra';
+  assert.equal(calculateVote('CSNU', ballot, { hasVeto: true, vetoCountries: ['Rússia'] }).result, 'pending');
 });
 test('UNICEF conta a décima delegação', () => {
   assert.equal(calculateVote('UNICEF', votes(5, 5, 0)).result, 'rejected');
